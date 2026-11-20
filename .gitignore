@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+logs/
+wandb/
+runs/
+output/
+outputs/
+videos/
+*.log
+*.tmp
+.DS_Store
+.venv/
