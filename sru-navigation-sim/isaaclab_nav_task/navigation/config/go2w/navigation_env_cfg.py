@@ -8,6 +8,7 @@
 import os
 
 from isaaclab.utils import configclass
+from isaaclab.sensors import patterns
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import RewardTermCfg as RewTerm
 
@@ -117,10 +118,24 @@ class Go2WNavigationEnvCfg(NavigationEnvCfg):
 
         # Go2W root link is "base"
         self.scene.raycast_camera.prim_path = "{ENV_REGEX_NS}/Robot/base"
-        # Depth camera: ~8cm above Go2W built-in camera, mounted near head
+        # RealSense optical center: +1 cm forward, +4 cm above the built-in Go2 camera,
+        # centered laterally (assumes built-in camera at (0.275, 0.0, 0.05) in the base frame).
         self.scene.raycast_camera.offset.pos = (0.285, 0.0, 0.09)
-        # Horizontal pitch (0 degrees): looking straight ahead
-        self.scene.raycast_camera.offset.rot = (1.0, 0.0, 0.0, 0.0)
+        # 20 deg downward pitch, matching the current real-world mount.
+        # Domain randomization in EventsCfg still perturbs this nominal pose by +/-5 deg.
+        self.scene.raycast_camera.offset.rot = (0.9848078, 0.0, 0.1736482, 0.0)
+        # Replace inherited ZED ray-cast pattern with RealSense D435 intrinsics.
+        # Values are the 64x40 direct-resize equivalent of 87 deg H x 58 deg V at 640x480,
+        # as documented in REALSENSE_DEPLOYMENT_EVAL_AND_PARAM_TUNING_PLAN.md.
+        self.scene.raycast_camera.pattern_cfg = patterns.PinholeCameraPatternCfg.from_ros_camera_info(
+            fx=33.720964,
+            fy=36.080955,
+            cx=32.0,
+            cy=20.0,
+            width=64,
+            height=40,
+            downsample_factor=1,
+        )
         self.scene.height_scanner_critic.prim_path = "{ENV_REGEX_NS}/Robot/base"
 
         # Apply dedicated Go2W rewards (strictly aligned with SRU-Odin)

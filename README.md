@@ -2,7 +2,7 @@
 
 可部署的 path-aware RL 训练工作区快照。仓库：`git@github.com:Yichang-Feng/sru-path-aware.git`。
 
-在其他电脑快速部署：
+在其他电脑快速部署（conda / Miniforge）：
 
 ```bash
 git clone git@github.com:Yichang-Feng/sru-path-aware.git
@@ -10,9 +10,9 @@ cd sru-path-aware
 bash setup.sh
 ```
 
-前置条件：Miniforge/conda、已创建 `sru-pathaware` 环境，且其中装有 Isaac Sim 4.5.0、IsaacLab 2.3.2、PyTorch 2.7.0+cu126、Python 3.10。`setup.sh` 只做 editable 安装与路径校验，不负责安装 Isaac Sim/PyTorch。训练脚本见下方；注意训练需至少 32 个环境并保证 GPU 有足够空闲显存。
+前置条件：Miniforge/conda、已创建 `sru-pathaware` 环境，且其中装有 Isaac Sim 4.5.0、IsaacLab 2.3.2、PyTorch 2.7.0+cu126、Python 3.10。`setup.sh` 只做 symlink 校验和 editable 安装，不负责安装 Isaac Sim/PyTorch。训练需至少 32 个环境并保证 GPU 有足够空闲显存。
 
-本仓库是单仓库快照：三个上游子项目的 `.git` 已剥离，所有本地兼容性补丁已直接包含在源码中。旧的 `/home/yichangfeng/sru-path-aware-rl` 与原 `sru-learning` 环境均不依赖。
+本仓库是单仓库快照：三个上游子项目的 `.git` 已剥离，所有本地兼容性补丁已直接包含在源码中；不依赖原 `sru-learning` 工作区的代码或数据。
 
 ## 目录来源
 
@@ -71,6 +71,7 @@ path-aware sim 分支没有 Go2W 任务；本工作区从原 sru-learning sim �
 - Go2W 机器人资产、低层运动策略、地形配置
 - Go2W 任务/agent 配置，并注册 `*-PathAware-*` 任务 ID
 - 原分支独有的 heading/goal 辅助函数（追加，不覆盖 path-aware 代码）
+- Go2W 仿真 raycast camera 改用 RealSense D435 内参（87°×58° @ 640×480 直接 resize 到 64×40）；安装位姿设为 `(0.285, 0.0, 0.09)`、20° 下俯（相对自带相机 +1cm 前向、+4cm 上方、横向居中）。噪声模型和相机域随机化参数保持不变。
 
 Go2W 的 Phase1-5、LowObs、Heading 等原任务 ID 也一并在本工作区注册；但只有 `*-PathAware-*`  aliases 明确保证继承 `target_path` 观测和 `progress_along_path` 奖励。所有移植改动都在 `sru-navigation-sim` 中，尚未提交。
 
