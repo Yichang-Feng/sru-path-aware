@@ -39,6 +39,24 @@ def _get_velocity_scale(default_vx: float = 1.5) -> list[float]:
     return [vx, vy, wz]
 
 
+def _apply_paper_depth_camera(env_cfg) -> None:
+    """Apply the paper's ZED-X depth camera model to a Go2W environment config.
+
+    The camera pose stays at the real Go2W mount; only the intrinsics and range are
+    changed to match the paper: 105° H x 78° V over 64x40 and a 10 m maximum range.
+    """
+    env_cfg.scene.raycast_camera.pattern_cfg = patterns.PinholeCameraPatternCfg.from_ros_camera_info(
+        fx=72.7025,
+        fy=72.7025,
+        cx=94.4457,
+        cy=62.5424,
+        width=192,
+        height=120,
+        downsample_factor=3,  # 192x120 -> 64x40
+    )
+    env_cfg.scene.raycast_camera.max_distance = 10.0
+
+
 @configclass
 class Go2WRewardsCfg(RewardsCfg):
     """Reward terms for Go2W navigation (Refactored: Gated potential + PBRS turning + L2 lateral suppression)."""
@@ -292,6 +310,23 @@ class Go2WNavigationEnvCfg_Phase4(Go2WNavigationEnvCfg):
         self.scene.terrain.max_init_terrain_level = init_level
 
 
+@configclass
+class Go2WNavigationEnvCfg_PathAwareNoCurriculum(Go2WNavigationEnvCfg_Phase4):
+    """Paper-aligned Go2W task: full 180-tile grid, no curriculum, ZED-X camera.
+
+    Kept separate from Phase4 so the existing D435 / real-deployment task is unchanged.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Paper: all 180 procedurally generated terrains are available from the start;
+        # no terrain curriculum and no reward-stage schedule.
+        self.scene.terrain.terrain_generator.curriculum = False
+        self.scene.terrain.terrain_generator.difficulty_range = (0.5, 1.0)
+        self.scene.terrain.max_init_terrain_level = 10  # clamped to all 6 difficulty rows
+        _apply_paper_depth_camera(self)
+
+
 # =============================================================================
 # Phase 5: Fine-Grained Refinement on Full Complexity (vx=1.5 m/s)
 # =============================================================================
@@ -356,6 +391,16 @@ class Go2WNavigationEnvCfg_PLAY(Go2WNavigationEnvCfg):
         self.observations.policy.enable_corruption = False
         self.events.base_external_force_torque = None
         self.events.push_robot = None
+
+
+@configclass
+class Go2WNavigationEnvCfg_PathAwareNoCurriculum_PLAY(Go2WNavigationEnvCfg_PLAY):
+    """Play counterpart of the paper-aligned Go2W task (same camera model)."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator.curriculum = False
+        _apply_paper_depth_camera(self)
 
 
 # Backward Compatibility Aliases

@@ -362,3 +362,27 @@ gym.register(
 )
 
 
+# =============================================================================
+# Paper-aligned Go2W path-aware aliases (single stage, no curriculum, ZED-X camera)
+# =============================================================================
+gym.register(
+    id="Isaac-Nav-PPO-Go2W-PathAware-NoCurriculum-v0",
+    entry_point="isaaclab_nav_task.navigation:NavigationEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_PathAwareNoCurriculum,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavPPORunnerPathAwareNoCurriculumCfg,
+    },
+)
+
+gym.register(
+    id="Isaac-Nav-PPO-Go2W-PathAware-NoCurriculum-Play-v0",
+    entry_point="isaaclab_nav_task.navigation:NavigationEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_PathAwareNoCurriculum_PLAY,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavPPORunnerPathAwareNoCurriculumCfg,
+    },
+)
+
+

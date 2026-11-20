@@ -91,7 +91,7 @@ class MySceneCfg(InteractiveSceneCfg):
         ),
         data_types=["distance_to_image_plane"],
         debug_vis=False,
-        max_distance=11.0,
+        max_distance=10.0,  # paper: 10 m maximum sensing range
         pattern_cfg=patterns.PinholeCameraPatternCfg.from_ros_camera_info(
             # ZED camera parameters from ROS camera_info topic
             fx=72.7025,

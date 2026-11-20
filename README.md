@@ -48,21 +48,31 @@ done
 B2W：
 
 ```bash
+# 冒烟
 ./train_b2w_pathaware.sh --num_envs 32 --max_iterations 10 --headless
 ./play_b2w_pathaware.sh --task Isaac-Nav-PPO-B2W-Play-v0 --checkpoint <model.pt> --num_envs 1 --headless
+
+# 论文对齐：180 地形 / 1046 envs / 10 m 深度相机
+./train_b2w_pathaware.sh --task Isaac-Nav-PPO-B2W-v0 --num_envs 1046 --max_iterations 15000 --headless
 ```
 
 Go2W（本工作区新增的 path-aware 任务）：
 
 ```bash
+# 冒烟（原 Phase4 / D435 任务）
 ./train_go2w_pathaware.sh --num_envs 32 --max_iterations 10 --headless
 ./play_go2w_pathaware.sh --checkpoint <model.pt> --num_envs 1 --headless
+
+# 论文对齐：无课程 + ZED-X 相机 + 与 B2W 相同的 PPO 超参
+./train_go2w_pathaware.sh --task Isaac-Nav-PPO-Go2W-PathAware-NoCurriculum-v0 --num_envs 1046 --max_iterations 15000 --headless
+./play_go2w_pathaware.sh --task Isaac-Nav-PPO-Go2W-PathAware-NoCurriculum-Play-v0 --checkpoint <model.pt> --num_envs 1 --headless
 ```
 
 可用任务 ID：
 
 - `Isaac-Nav-PPO-B2W-v0`、`Isaac-Nav-MDPO-B2W-v0` 及对应 `*-Play-v0` / `*-Dev-v0`
 - `Isaac-Nav-PPO-Go2W-PathAware-v0`、`Isaac-Nav-MDPO-Go2W-PathAware-v0` 及对应 `*-Play-v0` / `*-Dev-v0`
+- `Isaac-Nav-PPO-Go2W-PathAware-NoCurriculum-v0` 与 `Isaac-Nav-PPO-Go2W-PathAware-NoCurriculum-Play-v0`（论文对齐）
 
 ## Go2W 说明
 
@@ -72,6 +82,7 @@ path-aware sim 分支没有 Go2W 任务；本工作区从原 sru-learning sim �
 - Go2W 任务/agent 配置，并注册 `*-PathAware-*` 任务 ID
 - 原分支独有的 heading/goal 辅助函数（追加，不覆盖 path-aware 代码）
 - Go2W 仿真 raycast camera 改用 RealSense D435 内参（87°×58° @ 640×480 直接 resize 到 64×40）；安装位姿设为 `(0.285, 0.0, 0.09)`、20° 下俯（相对自带相机 +1cm 前向、+4cm 上方、横向居中）。噪声模型和相机域随机化参数保持不变。
+- 论文对齐任务 `*-PathAware-NoCurriculum-*` 在此基础上改用 ZED-X 内参（105°×78° @ 64×40）、10 m 测距并关闭地形课程；原 D435 / Phase4 任务保持不变。
 
 Go2W 的 Phase1-5、LowObs、Heading 等原任务 ID 也一并在本工作区注册；但只有 `*-PathAware-*`  aliases 明确保证继承 `target_path` 观测和 `progress_along_path` 奖励。所有移植改动都在 `sru-navigation-sim` 中，尚未提交。
 

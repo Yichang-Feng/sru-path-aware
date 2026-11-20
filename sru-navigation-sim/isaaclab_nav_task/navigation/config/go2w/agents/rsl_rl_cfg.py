@@ -237,6 +237,24 @@ class Go2WNavPPORunnerDevCfg(Go2WNavPPORunnerPhase1Cfg):
     experiment_name = "go2w_navigation_ppo_dev"
 
 
+@configclass
+class Go2WNavPPORunnerPathAwareNoCurriculumCfg(Go2WNavPPORunnerPhase1Cfg):
+    """Paper-aligned single-stage PPO runner, matching the B2W baseline hyperparameters."""
+
+    max_iterations = 15000
+    save_interval = 500
+    experiment_name = "go2w_navigation_ppo_pathaware_nocurriculum"
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.num_steps_per_env = 16
+        self.algorithm.clip_param = 0.2
+        self.algorithm.value_clip_param = 0.2
+        self.algorithm.entropy_coef = 0.00375
+        self.algorithm.desired_kl = 0.01
+        self.algorithm.max_grad_norm = 1.0
+
+
 # =============================================================================
 # Warm-Start Fine-Tuning Runner (Strictly aligned with SRU-Odin Go2NavPPORunnerCfg)
 # =============================================================================
