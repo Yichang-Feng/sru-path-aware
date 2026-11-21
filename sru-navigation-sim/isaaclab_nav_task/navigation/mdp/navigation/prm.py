@@ -143,6 +143,12 @@ class Prm:
         self.compute_free_mask()
         self.compute_padding_mask()
 
+        # The roadmap build walks these maps cell-by-cell from Python; a host copy keeps every
+        # lookup a plain numpy access instead of a GPU synchronisation (millions across all tiles).
+        self._height_np = self.height_map.detach().cpu().numpy()
+        self._padding_np = self.padding_mask.detach().cpu().numpy()
+        self._free_np = self.free_mask.detach().cpu().numpy()
+
         self.terrain_origin = terrain_origin
         terrain_gen_cfg = env.cfg.scene.terrain.terrain_generator
         self.h_scale = terrain_gen_cfg.horizontal_scale
@@ -200,12 +206,12 @@ class Prm:
         max_attempts = 10000
         # `x`/`y` index `height_map`/`padding_mask` directly (`height_map[x, y]`), so their ranges
         # must match those tensors' own axis sizes - not swapped, or this breaks for non-square tiles.
-        rows, cols = self.height_map.shape
+        rows, cols = self._height_np.shape
         for _ in range(max_attempts):
             x = random.randint(0, rows - 1)
             y = random.randint(0, cols - 1)
-            if not self.padding_mask[x, y]:
-                return (x, y, int(self.height_map[x, y]))
+            if not self._padding_np[x, y]:
+                return (x, y, int(self._height_np[x, y]))
         raise RuntimeError(f"Could not sample free point after {max_attempts} attempts. Check height map and padding settings.")
 
     def k_closest(self, points: np.ndarray, k: int) -> list[list[int]]:
@@ -274,24 +280,24 @@ class Prm:
         """
         rr, cc = line(int(p1[1]), int(p1[0]), int(p2[1]), int(p2[0]))
 
-        p1_padding = self.padding_mask[int(p1[0]), int(p1[1])]
-        p2_padding = self.padding_mask[int(p2[0]), int(p2[1])]
+        p1_padding = self._padding_np[int(p1[0]), int(p1[1])]
+        p2_padding = self._padding_np[int(p2[0]), int(p2[1])]
         points_not_padding = (not p1_padding) and (not p2_padding)
 
         if rev:
             rr_rev, cc_rev = line(int(p2[1]), int(p2[0]), int(p1[1]), int(p1[0]))
             if check_padding and points_not_padding:
-                if self.padding_mask[cc_rev, rr_rev].any():
+                if self._padding_np[cc_rev, rr_rev].any():
                     return False
-                heights = self.height_map[cc_rev, rr_rev]
+                heights = self._height_np[cc_rev, rr_rev]
                 if not np.all(np.abs(np.diff(heights)) <= self.cfg.max_height_diff):
                     return False
 
         if check_padding and points_not_padding:
-            if self.padding_mask[cc, rr].any():
+            if self._padding_np[cc, rr].any():
                 return False
 
-        heights = self.height_map[cc, rr]
+        heights = self._height_np[cc, rr]
         traversable = np.all(np.abs(np.diff(heights)) <= self.cfg.max_height_diff)
 
         if traversable:
@@ -305,7 +311,7 @@ class Prm:
         free_nodes_mask = []
         for _ in range(self.cfg.N):
             nodes.append(self.sample_free_point())
-            free_nodes_mask.append(bool(self.free_mask[nodes[-1][0], nodes[-1][1]]))
+            free_nodes_mask.append(bool(self._free_np[nodes[-1][0], nodes[-1][1]]))
         nodes = np.array(nodes)
 
         self.free_nodes = [i for i in range(len(nodes)) if free_nodes_mask[i]]

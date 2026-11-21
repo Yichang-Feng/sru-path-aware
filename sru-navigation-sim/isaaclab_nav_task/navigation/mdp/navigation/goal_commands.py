@@ -127,45 +127,42 @@ class PositionSampler:
         # =========================
         # Build GOAL position table (from valid_mask with platform repetition)
         # =========================
+        # `nonzero` walks the mask in row-major order, so the rows are already grouped by terrain
+        # id and each terrain owns one contiguous slice (no per-terrain mask compares needed).
         valid_indices = self.valid_mask.nonzero(as_tuple=False)
+        valid_counts = torch.bincount(valid_indices[:, 0], minlength=num_terrains)
+        valid_offsets = torch.cumsum(valid_counts, 0) - valid_counts
+        counts = valid_counts.tolist()
+        offsets = valid_offsets.tolist()
+
+        # A valid cell lies on a platform iff the platform mask is set at the same (row, col).
+        # One gather replaces the per-terrain (num_valid, num_platforms) broadcast comparison,
+        # which allocated hundreds of MB per tile and dominated start-up time.
+        is_platform = self.platform_mask[
+            valid_indices[:, 0], valid_indices[:, 1], valid_indices[:, 2]
+        ]
 
         # Build enhanced indices with platform repetition
         enhanced_indices = []
+        goal_counts = []
         for terrain_idx in range(num_terrains):
-            terrain_valid = valid_indices[valid_indices[:, 0] == terrain_idx]
+            start, count = offsets[terrain_idx], counts[terrain_idx]
+            terrain_valid = valid_indices[start : start + count]
 
-            if len(terrain_valid) == 0:
-                enhanced_indices.append(terrain_valid)
-                continue
-
-            # Find platform positions
-            terrain_platform = self.platform_mask[terrain_idx]
-            platform_positions = terrain_platform.nonzero(as_tuple=False)
-
-            if len(platform_positions) > 0:
-                # Check which valid positions are platforms (vectorized)
-                valid_xy = terrain_valid[:, 1:]  # (num_valid, 2)
-                plat_xy = platform_positions  # (num_platforms, 2)
-
-                # Broadcast compare: (num_valid, 1, 2) vs (1, num_platforms, 2)
-                matches = (valid_xy.unsqueeze(1) == plat_xy.unsqueeze(0)).all(dim=2)
-                is_platform = matches.any(dim=1)
-
-                # Repeat platform positions
-                platform_valid = terrain_valid[is_platform]
-                if len(platform_valid) > 0:
+            if count > 0:
+                platform_valid = terrain_valid[is_platform[start : start + count]]
+                if platform_valid.shape[0] > 0:
                     repeated = platform_valid.repeat(platform_repeat_count, 1)
                     terrain_valid = torch.cat([terrain_valid, repeated], dim=0)
 
             enhanced_indices.append(terrain_valid)
+            goal_counts.append(terrain_valid.shape[0])
 
         # Count positions per terrain for goals
-        self.count_per_terrain = torch.zeros(num_terrains, dtype=torch.long, device=self.device)
-        for terrain_idx in range(num_terrains):
-            self.count_per_terrain[terrain_idx] = len(enhanced_indices[terrain_idx])
+        self.count_per_terrain = torch.tensor(goal_counts, dtype=torch.long, device=self.device)
 
         # Create padded tensor for goal positions
-        max_count = max(1, self.count_per_terrain.max().item())
+        max_count = max(1, max(goal_counts, default=0))
         self.positions = torch.full(
             (num_terrains, max_count, 3), -1, dtype=torch.long, device=self.device
         )
@@ -181,27 +178,25 @@ class PositionSampler:
         # Build SPAWN position table (from spawn_mask, no platform repetition)
         # =========================
         spawn_indices = self.spawn_mask.nonzero(as_tuple=False)
+        spawn_counts = torch.bincount(spawn_indices[:, 0], minlength=num_terrains)
+        spawn_offsets = torch.cumsum(spawn_counts, 0) - spawn_counts
+        spawn_counts_list = spawn_counts.tolist()
+        spawn_offsets_list = spawn_offsets.tolist()
 
         # Count spawn positions per terrain
-        self.spawn_count_per_terrain = torch.zeros(num_terrains, dtype=torch.long, device=self.device)
-        spawn_positions_list = []
-        for terrain_idx in range(num_terrains):
-            terrain_spawn = spawn_indices[spawn_indices[:, 0] == terrain_idx]
-            self.spawn_count_per_terrain[terrain_idx] = len(terrain_spawn)
-            spawn_positions_list.append(terrain_spawn)
+        self.spawn_count_per_terrain = spawn_counts
 
         # Create padded tensor for spawn positions
-        max_spawn_count = max(1, self.spawn_count_per_terrain.max().item())
+        max_spawn_count = max(1, max(spawn_counts_list, default=0))
         self.spawn_positions = torch.full(
             (num_terrains, max_spawn_count, 3), -1, dtype=torch.long, device=self.device
         )
 
         # Fill spawn position tables
         for terrain_idx in range(num_terrains):
-            terrain_positions = spawn_positions_list[terrain_idx]
-            num_pos = terrain_positions.shape[0]
-            if num_pos > 0:
-                self.spawn_positions[terrain_idx, :num_pos] = terrain_positions
+            start, count = spawn_offsets_list[terrain_idx], spawn_counts_list[terrain_idx]
+            if count > 0:
+                self.spawn_positions[terrain_idx, :count] = spawn_indices[start : start + count]
 
     def sample(self, terrain_indices: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample GOAL positions for given terrain indices.
