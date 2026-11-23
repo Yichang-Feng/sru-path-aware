@@ -12,6 +12,25 @@ from isaaclab_nav_task.navigation.config.rl_cfg import (
     RslRlPpoActorCriticCfg,
     RslRlPpoAlgorithmCfg,
 )
+from isaaclab_nav_task.navigation.config.b2w.agents.rsl_rl_cfg import B2WNavMDPORunnerCfg  # isort: skip
+
+
+@configclass
+class Go2WNavMDPORunnerPaperCfg(B2WNavMDPORunnerCfg):
+    """Identical to the paper-aligned B2W MDPO runner; only the experiment name differs."""
+
+    experiment_name = "go2w_navigation_mdpo_paper"
+
+
+@configclass
+class Go2WNavMDPORunnerPaperDevCfg(Go2WNavMDPORunnerPaperCfg):
+    """Smoke-test variant of the paper-aligned Go2W runner."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.max_iterations = 300
+        self.experiment_name = "go2w_navigation_mdpo_paper_dev"
+        self.logger = "tensorboard"
 
 
 # =============================================================================

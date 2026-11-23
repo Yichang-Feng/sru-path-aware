@@ -13,6 +13,29 @@ from . import agents, navigation_env_cfg
 # Register Gym environments.
 ##
 
+# Paper-controlled comparison: identical to the B2W paper task except for the robot.
+gym.register(
+    id="Isaac-Nav-MDPO-Go2W-Paper-v0",
+    entry_point="isaaclab_nav_task.navigation:NavigationEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_Paper,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavMDPORunnerPaperCfg,
+    },
+)
+
+
+gym.register(
+    id="Isaac-Nav-MDPO-Go2W-Paper-Dev-v0",
+    entry_point="isaaclab_nav_task.navigation:NavigationEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_Paper_DEV,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavMDPORunnerPaperDevCfg,
+    },
+)
+
+
 # =============================================================================
 # MDPO 5-Phase Environments (Primary Algorithm)
 # =============================================================================

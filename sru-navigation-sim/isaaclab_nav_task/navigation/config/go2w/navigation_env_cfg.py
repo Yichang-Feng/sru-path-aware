@@ -13,6 +13,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import RewardTermCfg as RewTerm
 
 from isaaclab_nav_task.navigation.navigation_env_cfg import NavigationEnvCfg, RewardsCfg
+from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import B2WNavigationEnvCfg  # isort: skip
 import isaaclab_nav_task.navigation.mdp as mdp
 
 from isaaclab_nav_task.navigation.assets import GO2W_CFG, ISAACLAB_NAV_TASKS_ASSETS_DIR  # isort: skip
@@ -236,6 +237,76 @@ class Go2WNavigationEnvCfg(NavigationEnvCfg):
             GO2W_PHASE4_TERRAIN_CFG, default_diff=(0.3, 0.8)
         )
         self.scene.terrain.terrain_generator.curriculum = True
+
+
+@configclass
+class Go2WNavigationEnvCfg_Paper(B2WNavigationEnvCfg):
+    """Paper-aligned Go2W task: only the robot and its low-level controller differ from B2W.
+
+    Rewards, terrain, curriculum, observation corruption, action filtering and episode settings
+    are inherited unchanged from :class:`B2WNavigationEnvCfg`.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        from isaaclab_nav_task.navigation.mdp.observations import initialize_depth_noise_generator
+
+        initialize_depth_noise_generator(robot_name="go2w", use_jit_precompiled=False)
+
+        self.scene.robot = GO2W_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.raycast_camera.prim_path = "{ENV_REGEX_NS}/Robot/base"
+        self.scene.raycast_camera.offset.pos = (0.285, 0.0, 0.09)
+        self.scene.raycast_camera.offset.rot = (0.9848078, 0.0, 0.1736482, 0.0)
+        self.scene.height_scanner_critic.prim_path = "{ENV_REGEX_NS}/Robot/base"
+
+        self.terminations.base_contact.params = {
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["base", ".*hip", ".*thigh"]),
+            "threshold": 1.0,
+        }
+
+        self.actions.velocity_command.low_level_position_action = mdp.JointPositionActionCfg(
+            asset_name="robot", joint_names=[".*hip_joint", ".*thigh_joint", ".*calf_joint"], scale=1.0,
+            use_default_offset=True
+        )
+        self.actions.velocity_command.low_level_velocity_action = mdp.JointVelocityActionCfg(
+            asset_name="robot", joint_names=[".*foot_joint"], scale=1.0, use_default_offset=True
+        )
+        self.actions.velocity_command.low_level_policy_file = os.path.join(
+            ISAACLAB_NAV_TASKS_ASSETS_DIR, "Policies", "locomotion", "go2w", "policy_go2w_dreamwaq_adapted.pt"
+        )
+
+        if "legs" in self.scene.robot.actuators:
+            self.scene.robot.actuators["legs"].stiffness = 50.0
+            self.scene.robot.actuators["legs"].damping = 1.0
+        if "legs_calf" in self.scene.robot.actuators:
+            self.scene.robot.actuators["legs_calf"].stiffness = 50.0
+            self.scene.robot.actuators["legs_calf"].damping = 1.0
+        if "wheels" in self.scene.robot.actuators:
+            self.scene.robot.actuators["wheels"].stiffness = 0.0
+            self.scene.robot.actuators["wheels"].damping = 0.5
+
+        self.scene.robot.init_state.pos = (0.0, 0.0, 0.40)
+        self.scene.robot.init_state.joint_pos = {
+            ".*hip_joint": 0.0,
+            ".*thigh_joint": 0.67,
+            ".*calf_joint": -1.30,
+            ".*foot_joint": 0.0,
+        }
+
+        self.observations.low_level_policy.base_lin_vel = None
+        self.observations.low_level_policy.enable_corruption = False
+        self.events.reset_robot_joints = None
+
+
+@configclass
+class Go2WNavigationEnvCfg_Paper_DEV(Go2WNavigationEnvCfg_Paper):
+    """Smoke-test variant with a reduced terrain grid."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator.num_rows = 2
+        self.scene.terrain.terrain_generator.num_cols = 30
 
 
 # =============================================================================
