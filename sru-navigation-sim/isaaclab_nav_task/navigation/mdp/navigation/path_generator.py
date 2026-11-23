@@ -259,7 +259,8 @@ class MultiPath:
 
         Returns:
             dists: distance from the robot to the closest point on its path, `(num_envs,)`.
-            progress: positive progress made since the last call (0 if none, or on regression), `(num_envs,)`.
+            progress: progress made since the last call in percent of total path length
+                (0 if none, or on regression), `(num_envs,)`.
         """
         a = self.paths_unscaled[:, :-1, :]
         b = self.paths_unscaled[:, 1:, :]
@@ -277,7 +278,9 @@ class MultiPath:
         cum_lens_prev = torch.cat([torch.zeros((seg_lens.shape[0], 1), device=seg_lens.device), cum_lens[:, :-1]], dim=1)
         total_len = torch.sum(seg_lens, dim=1, keepdim=True)
 
-        progress_along_path = (cum_lens_prev + t_clamped * seg_lens) / total_len
+        # Paper (Haro et al. 2026, eq. 12) defines progress in percent of the total path length.
+        # Keeping it as a [0, 1] fraction made the 0.15 shortcut threshold mean 15% per step.
+        progress_along_path = 100.0 * (cum_lens_prev + t_clamped * seg_lens) / total_len
         best_progress = progress_along_path.gather(1, best_idx.unsqueeze(1)).squeeze(1)
 
         progress_diff = torch.where(
@@ -288,7 +291,7 @@ class MultiPath:
         best_progress = torch.where(best_progress < self.last_best_progress, torch.zeros_like(best_progress), best_progress)
         self.last_best_progress = torch.max(self.last_best_progress, best_progress)
 
-        # only reward progress above a small threshold, to filter out sensor/geometry noise
+        # epsilon = 0.15% of the path per step (paper eq. 12), filtering sensor/geometry noise
         progress = torch.where(progress_diff > 0.15, progress_diff, torch.zeros_like(progress_diff))
 
         return best_dist, progress

@@ -349,14 +349,14 @@ class RewardsCfg:
 
     # Penalties
     joint_acc_l2_joint = RewTerm(
-        func=mdp.joint_acc_l2,
-        weight=-1e-7,
+        func=mdp.joint_acc_l1,
+        weight=-2e-6,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINT_NAMES + WHEEL_JOINT_NAMES)},
     )
 
     lateral_movement = RewTerm(func=mdp.lateral_movement, weight=-0.1)
     rot_movement = RewTerm(func=mdp.rot_movement, weight=-1e-5)
-    action_rate_l1 = RewTerm(func=mdp.action_rate_l1, weight=-0.1)
+    action_rate_l1 = RewTerm(func=mdp.action_rate_l1_momentum, weight=-0.1, params={"momentum": 0.9})
     episode_termination = RewTerm(func=mdp.is_terminated, weight=-50.0)
 
     # Goal rewards

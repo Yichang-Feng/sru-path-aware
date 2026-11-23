@@ -578,6 +578,22 @@ class RobotNavigationGoalCommand(CommandTerm):
         self.spawn_position_world[env_ids, 1] = terrain_origins[:, 1] + spawn_y
         self.spawn_position_world[env_ids, 2] = spawn_z + spawn_offset
 
+        # Reset events run before the command manager in ManagerBasedRLEnv._reset_idx, so the robot
+        # was teleported to the *previous* episode's spawn above. Re-apply the root pose now that
+        # this episode's spawn is known; otherwise the reference path (which starts here) does not
+        # match where the robot actually is for this episode.
+        default_root_state = self.robot.data.default_root_state[env_ids_tensor]
+        root_pose = default_root_state[:, :7].clone()
+        root_pose[:, :3] = default_root_state[:, :3] + terrain.env_origins[env_ids_tensor]
+        yaw = (torch.rand((len(env_ids_tensor),), device=self.device) * 2.0 - 1.0) * math.pi
+        yaw_delta = math_utils.quat_from_euler_xyz(torch.zeros_like(yaw), torch.zeros_like(yaw), yaw)
+        root_pose[:, 3:7] = math_utils.quat_mul(default_root_state[:, 3:7], yaw_delta)
+        self.robot.write_root_pose_to_sim(root_pose, env_ids=env_ids_tensor)
+        self.robot.write_root_velocity_to_sim(
+            torch.zeros((len(env_ids_tensor), 6), device=self.device), env_ids=env_ids_tensor
+        )
+        self.previous_position[env_ids_tensor] = self.spawn_position_world[env_ids_tensor]
+
         # Rebuild the global path for these environments: spawn -> goal, on their terrain tile's PRM.
         # Indexing with env_ids_tensor (not the raw env_ids parameter) since MultiPath.rebuild needs
         # a real, enumerable tensor of indices (env_ids here may be a slice, e.g. slice(None) on a
@@ -590,9 +606,9 @@ class RobotNavigationGoalCommand(CommandTerm):
             env_ids=env_ids_tensor,
         )
 
-        # Initialize distance metrics
+        # Initialize distance metrics (from the spawn the robot was just placed at)
         self.initial_distance_to_goal[env_ids] = torch.norm(
-            self.robot.data.root_pos_w[env_ids] - self.goal_position_world[env_ids], dim=1
+            self.spawn_position_world[env_ids] - self.goal_position_world[env_ids], dim=1
         )
         self.closest_distance_to_goal[env_ids] = self.initial_distance_to_goal[env_ids]
 

@@ -14,3 +14,6 @@ videos/
 *.tmp
 .DS_Store
 .venv/
+
+# Research papers (keep locally, not in git)
+*.pdf
