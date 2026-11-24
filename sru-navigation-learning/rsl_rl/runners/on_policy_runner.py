@@ -304,6 +304,12 @@ class OnPolicyRunner:
         if self.is_mdpo and locs["mean_kl_divergence"] is not None:
             self.writer.add_scalar("Loss/kl_divergence", locs["mean_kl_divergence"], locs["it"])
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
+        # Annealed coefficients, so a run can be checked against what its agent.yaml asks for
+        # instead of trusting that the configuration took effect.
+        if hasattr(self.alg, "entropy_coef"):
+            self.writer.add_scalar("Loss/entropy_coef", self.alg.entropy_coef, locs["it"])
+        if hasattr(self.alg, "clip_param"):
+            self.writer.add_scalar("Loss/clip_param", self.alg.clip_param, locs["it"])
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar("Perf/collection time", locs["collection_time"], locs["it"])

@@ -59,6 +59,11 @@ class Go2WNavBaseRunnerCfg(RslRlOnPolicyRunnerCfg):
         num_cameras=1,
         image_input_dims=(64, 5, 8),  # 64 channels * 5 * 8 = 2560
         height_input_dims=(64, 7, 7),  # 64 channels * 7 * 7 = 3136
+        # Same bounds as the B2W runner (see `b2w/agents/rsl_rl_cfg.py`). The Go2W run of
+        # 2026-11-23 trained without them and `Policy/mean_noise_std` went 0.92 -> 12.05 over
+        # 4900 iterations, costing -16.6 per episode in `action_rate_l1` alone.
+        log_std_min=-2.5,
+        log_std_max=0.2,
     )
 
 

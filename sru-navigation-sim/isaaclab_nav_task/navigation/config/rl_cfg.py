@@ -84,11 +84,32 @@ class RslRlPpoAlgorithmCfg:
     clip_param: float = MISSING
     """The clipping parameter for the policy."""
 
+    min_clip_param: float = 0.0
+    """Target of the `clip_schedule` anneal. Give it a positive value when annealing."""
+
+    clip_schedule: str = "fixed"
+    """Anneal `clip_param` from its initial value down to `min_clip_param` ("fixed" | "cosine" |
+    "linear" | "exponential"). "fixed" keeps the constant value, which is what every config that
+    does not ask otherwise gets. `value_clip_param` follows `clip_param` while annealing."""
+
     value_clip_param: float = 0.2
     """The value clipping parameter. Default is 0.2."""
 
     entropy_coef: float = MISSING
     """The coefficient for the entropy loss."""
+
+    min_entropy_coef: float = 0.0
+    """Target of the `entropy_schedule` anneal."""
+
+    entropy_hold_iters: int = 0
+    """Iterations to hold `entropy_coef` before the anneal starts."""
+
+    entropy_decay_span: int = 0
+    """Iterations the anneal takes once the hold is over (0 = the rest of the run)."""
+
+    entropy_schedule: str = "fixed"
+    """Anneal `entropy_coef` from its initial value down to `min_entropy_coef` ("fixed" | "cosine"
+    | "linear" | "exponential"). "fixed" keeps the constant value."""
 
     num_learning_epochs: int = MISSING
     """The number of learning epochs per update."""
@@ -98,6 +119,9 @@ class RslRlPpoAlgorithmCfg:
 
     learning_rate: float = MISSING
     """The learning rate for the policy."""
+
+    min_learning_rate: float = 1.0e-7
+    """Floor of the `schedule` anneal. `cosine` decays to this value instead of to zero."""
 
     schedule: str = MISSING
     """The learning rate schedule."""

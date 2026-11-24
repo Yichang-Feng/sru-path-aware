@@ -105,6 +105,12 @@ class MDPO:
         use_clipped_value_loss: bool = True,
         schedule: str = "linear",
         desired_kl: float = 0.01,
+        min_entropy_coef: float = 0.0,
+        entropy_hold_iters: int = 0,
+        entropy_decay_span: int = 0,
+        entropy_schedule: str = "fixed",
+        min_clip_param: float = 0.0,
+        clip_schedule: str = "fixed",
         device: str = "cpu",
         use_muon: bool = True,
         **kwargs,
@@ -151,6 +157,22 @@ class MDPO:
         self.lam = lam
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
+
+        # Optional annealing of the exploration bonus and of the trust region.
+        #
+        # These are off by default (`*_schedule="fixed"`), so a config that does not ask for them
+        # keeps the constants above. The Go2W 5-phase curriculum asks for them explicitly, and
+        # before this was implemented the fields were accepted into `**kwargs` and dropped: the
+        # run of 2026-11-23 ran constant `entropy_coef = 0.003` while its `agent.yaml` advertised
+        # an anneal to 0.001, which is one of the reasons `Policy/mean_noise_std` reached 12.
+        self.initial_entropy_coef = entropy_coef
+        self.min_entropy_coef = min_entropy_coef
+        self.entropy_hold_iters = entropy_hold_iters
+        self.entropy_decay_span = entropy_decay_span
+        self.entropy_schedule = entropy_schedule
+        self.initial_clip_param = clip_param
+        self.min_clip_param = min_clip_param
+        self.clip_schedule = clip_schedule
 
     def _create_optimizer(
         self, actor_critic: "ActorCritic", learning_rate: float, use_muon: bool
@@ -361,7 +383,11 @@ class MDPO:
                 self.learning_rate = self.min_learning_rate
         elif self.schedule == "cosine":
             progress = iteration / max_iterations
-            self.learning_rate = 0.5 * self.max_learning_rate * (1.0 + math.cos(math.pi * progress))
+            # Decay to `min_learning_rate`, not to zero: reaching 0 at the end of a run stops
+            # learning entirely, which silently defeats a `min_learning_rate` asked for in config.
+            self.learning_rate = self.min_learning_rate + 0.5 * (
+                self.max_learning_rate - self.min_learning_rate
+            ) * (1.0 + math.cos(math.pi * progress))
         elif self.schedule == "exponential":
             progress = iteration / max_iterations
             decay_rate = 5.0
@@ -374,6 +400,46 @@ class MDPO:
             param_group["lr"] = self.learning_rate
         for param_group in self.optimizer_2.param_groups:
             param_group["lr"] = self.learning_rate
+
+    def _update_entropy_coef(self, iteration: int, max_iterations: int):
+        """Hold `entropy_coef`, then anneal it towards `min_entropy_coef`."""
+        if self.entropy_schedule == "fixed" or self.initial_entropy_coef <= 0.0:
+            return
+
+        if iteration <= self.entropy_hold_iters:
+            self.entropy_coef = self.initial_entropy_coef
+            return
+
+        if self.entropy_decay_span > 0:
+            progress = min((iteration - self.entropy_hold_iters) / self.entropy_decay_span, 1.0)
+        else:
+            remaining = max(max_iterations - self.entropy_hold_iters, 1)
+            progress = min((iteration - self.entropy_hold_iters) / remaining, 1.0)
+
+        start, end = self.initial_entropy_coef, self.min_entropy_coef
+        if self.entropy_schedule == "linear":
+            self.entropy_coef = end + (start - end) * (1.0 - progress)
+        elif self.entropy_schedule == "exponential":
+            self.entropy_coef = end + (start - end) * math.exp(-3.0 * progress)
+        elif self.entropy_schedule == "cosine":
+            self.entropy_coef = end + (start - end) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    def _update_clip_param(self, iteration: int, max_iterations: int):
+        """Anneal `clip_param` (and `value_clip_param` with it) towards `min_clip_param`."""
+        if self.clip_schedule == "fixed" or self.min_clip_param <= 0.0:
+            return
+        if self.initial_clip_param == self.min_clip_param:
+            return
+
+        progress = min(max(iteration / max(max_iterations, 1), 0.0), 1.0)
+        start, end = self.initial_clip_param, self.min_clip_param
+        if self.clip_schedule == "cosine":
+            self.clip_param = end + (start - end) * 0.5 * (1.0 + math.cos(math.pi * progress))
+        elif self.clip_schedule == "linear":
+            self.clip_param = end + (start - end) * (1.0 - progress)
+        elif self.clip_schedule == "exponential":
+            self.clip_param = end + (start - end) * math.exp(-3.0 * progress)
+        self.value_clip_param = self.clip_param
 
     def _compute_ppo_loss(
         self,
@@ -425,6 +491,9 @@ class MDPO:
 
         # Update learning rate
         self._update_learning_rate(iteration, max_iterations)
+        # Update the exploration bonus and the trust region where the config asks for it
+        self._update_entropy_coef(iteration, max_iterations)
+        self._update_clip_param(iteration, max_iterations)
 
         # Get mini-batch generators
         if self.actor_critic_1.is_recurrent:
