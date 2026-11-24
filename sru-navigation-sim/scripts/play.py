@@ -122,7 +122,7 @@ def load_checkpoint_with_fallback(runner: OnPolicyRunner, checkpoint_path: str, 
         checkpoint_path: Path to checkpoint file
         load_optimizer: Whether to load optimizer state
     """
-    print(f"[INFO] Loading checkpoint from: {checkpoint_path}")
+    print(f"[INFO] Loading checkpoint from: {checkpoint_path}", flush=True)
 
     # Load checkpoint to CPU first for compatibility
     loaded_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
@@ -143,13 +143,16 @@ def load_checkpoint_with_fallback(runner: OnPolicyRunner, checkpoint_path: str, 
 
     # Load optimizer if requested
     if load_optimizer:
-        if runner.is_mdpo:
-            runner.alg.optimizer_1.load_state_dict(loaded_dict["optimizer_state_dict"])
-        else:
-            runner.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
+        try:
+            if runner.is_mdpo:
+                runner.alg.optimizer_1.load_state_dict(loaded_dict["optimizer_state_dict"])
+            else:
+                runner.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
+        except (ValueError, KeyError, RuntimeError) as e:
+            print(f"[WARN] Could not load optimizer state ({e}); continuing without optimizer (not needed for inference).")
 
     runner.current_learning_iteration = loaded_dict["iter"]
-    print(f"[INFO] Loaded checkpoint from iteration {loaded_dict['iter']}")
+    print(f"[INFO] Loaded checkpoint from iteration {loaded_dict['iter']}", flush=True)
 
 
 def export_policy_jit(runner: OnPolicyRunner, checkpoint_path: str):
@@ -242,8 +245,8 @@ def main():
     # Create runner
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
 
-    # Load checkpoint with compatibility handling
-    load_checkpoint_with_fallback(runner, resume_path)
+    # Load checkpoint with compatibility handling (optimizer not needed for inference)
+    load_checkpoint_with_fallback(runner, resume_path, load_optimizer=False)
 
     # Export JIT if requested
     if args_cli.export_jit:
@@ -267,7 +270,7 @@ def main():
     step_count = 0
     while simulation_app.is_running():
         if args_cli.max_steps is not None and step_count >= args_cli.max_steps:
-            print(f"[INFO] Reached max_steps ({args_cli.max_steps}). Simulation playback finished successfully.")
+            print(f"[INFO] Reached max_steps ({args_cli.max_steps}). Simulation playback finished successfully.", flush=True)
             break
         # Run policy
         with torch.inference_mode():

@@ -259,7 +259,7 @@ class MultiPath:
 
         Returns:
             dists: distance from the robot to the closest point on its path, `(num_envs,)`.
-            progress: progress made since the last call in percent of total path length
+            progress: progress made since the last call in percent of the total path length
                 (0 if none, or on regression), `(num_envs,)`.
         """
         a = self.paths_unscaled[:, :-1, :]
@@ -279,7 +279,8 @@ class MultiPath:
         total_len = torch.sum(seg_lens, dim=1, keepdim=True)
 
         # Paper (Haro et al. 2026, eq. 12) defines progress in percent of the total path length.
-        # Keeping it as a [0, 1] fraction made the 0.15 shortcut threshold mean 15% per step.
+        # Keeping it as a [0, 1] fraction made the 0.15 shortcut threshold mean 15% per step, which
+        # never fires (a 0.2 s step at 1.5 m/s advances <3% of a 10-40 m path), so the term was inert.
         progress_along_path = 100.0 * (cum_lens_prev + t_clamped * seg_lens) / total_len
         best_progress = progress_along_path.gather(1, best_idx.unsqueeze(1)).squeeze(1)
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import math
+
 import torch
 
 from isaaclab.assets import Articulation
@@ -27,33 +28,6 @@ if TYPE_CHECKING:
 def action_rate_l1(env: "ManagerBasedRLEnv") -> torch.Tensor:
     """Penalize the rate of change of the actions using L1 kernel."""
     return torch.sum(torch.abs(env.action_manager.action - env.action_manager.prev_action), dim=1)
-
-
-def action_rate_l1_momentum(env: "ManagerBasedRLEnv", momentum: float = 0.9) -> torch.Tensor:
-    """L1 penalty on the deviation from a momentum-filtered action (paper eq. 10).
-
-    ``a_m,t = momentum * a_m,t-1 + (1 - momentum) * a_t``. Unlike penalizing
-    ``a_t - a_{t-1}`` directly, this lets the policy explore with high-frequency
-    action noise without paying the full per-step penalty for it.
-    """
-    action = env.action_manager.action
-    if not hasattr(env, "_action_momentum") or env._action_momentum.shape != action.shape:
-        env._action_momentum = action.detach().clone()
-        return torch.zeros(action.shape[0], device=action.device)
-
-    # Restart the filter for environments that just began a new episode.
-    just_reset = env.episode_length_buf <= 1
-    if just_reset.any():
-        env._action_momentum[just_reset] = action[just_reset].detach()
-
-    env._action_momentum = momentum * env._action_momentum + (1.0 - momentum) * action.detach()
-    return torch.sum(torch.abs(action - env._action_momentum), dim=1)
-
-
-def joint_acc_l1(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    """Penalize joint accelerations with an L1 kernel (paper eq. 10)."""
-    asset: Articulation = env.scene[asset_cfg.name]
-    return torch.sum(torch.abs(asset.data.joint_acc[:, asset_cfg.joint_ids]), dim=1)
 
 
 def lateral_movement(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
@@ -154,9 +128,8 @@ def progress_along_path(env: ManagerBasedRLEnv, command_name: str, probability: 
             the other goal rewards, so it isn't applied identically on every single step).
 
     Returns:
-        Dense reward proportional to newly-made progress along the path, in percent of the total
-        path length (0 if no progress, or on a regression back towards the start - see
-        `MultiPath.get_all_path_metrics`).
+        Dense reward proportional to newly-made progress along the path (0 if no progress, or on a
+        regression back towards the start - see `MultiPath.get_all_path_metrics`).
     """
     goal_cmd_generator: RobotNavigationGoalCommand = env.command_manager._terms[command_name]
     _, progress = goal_cmd_generator.get_path_metrics()
@@ -180,6 +153,17 @@ def backward_movement_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg 
     # Only penalize negative forward velocity (backward movement)
     backward_velocity = torch.clamp(-forward_velocity, min=0.0, max=1.0)
     return backward_velocity
+
+
+def episode_time_out(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """Return one for environments whose 60 s episode horizon ends on this step.
+
+    This is intentionally distinct from the generic ``termination_manager.time_outs``
+    signal: successful early termination and terrain fall are also marked as time-outs
+    in the task config, but they must not receive this additional penalty.
+    """
+    return (env.episode_length_buf >= env.max_episode_length).float()
+
 
 # --- Go2W helpers ported from sru-learning (additive; path-aware code preserved) ---
 

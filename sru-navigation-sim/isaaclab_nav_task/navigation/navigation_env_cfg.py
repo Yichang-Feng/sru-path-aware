@@ -91,7 +91,7 @@ class MySceneCfg(InteractiveSceneCfg):
         ),
         data_types=["distance_to_image_plane"],
         debug_vis=False,
-        max_distance=10.0,  # paper: 10 m maximum sensing range
+        max_distance=11.0,
         pattern_cfg=patterns.PinholeCameraPatternCfg.from_ros_camera_info(
             # ZED camera parameters from ROS camera_info topic
             fx=72.7025,
@@ -349,14 +349,14 @@ class RewardsCfg:
 
     # Penalties
     joint_acc_l2_joint = RewTerm(
-        func=mdp.joint_acc_l1,
-        weight=-2e-6,
+        func=mdp.joint_acc_l2,
+        weight=-1e-7,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINT_NAMES + WHEEL_JOINT_NAMES)},
     )
 
     lateral_movement = RewTerm(func=mdp.lateral_movement, weight=-0.1)
     rot_movement = RewTerm(func=mdp.rot_movement, weight=-1e-5)
-    action_rate_l1 = RewTerm(func=mdp.action_rate_l1_momentum, weight=-0.1, params={"momentum": 0.9})
+    action_rate_l1 = RewTerm(func=mdp.action_rate_l1, weight=-0.1)
     episode_termination = RewTerm(func=mdp.is_terminated, weight=-50.0)
 
     # Goal rewards
