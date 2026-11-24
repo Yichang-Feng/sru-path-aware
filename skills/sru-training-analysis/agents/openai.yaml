@@ -1,0 +1,3 @@
+interface:
+  display_name: "SRU Training Analysis"
+  short_description: "Analyze SRU/B2W/Go2W training runs and diagnose reward collapse."

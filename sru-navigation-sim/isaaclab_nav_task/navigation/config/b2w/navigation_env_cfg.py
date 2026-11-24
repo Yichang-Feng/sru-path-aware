@@ -8,9 +8,9 @@
 import os
 
 from isaaclab.utils import configclass
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import RewardTermCfg as RewTerm, SceneEntityCfg
 
-from isaaclab_nav_task.navigation.navigation_env_cfg import NavigationEnvCfg
+from isaaclab_nav_task.navigation.navigation_env_cfg import NavigationEnvCfg, RewardsCfg
 import isaaclab_nav_task.navigation.mdp as mdp
 
 from isaaclab_nav_task.navigation.assets import B2W_CFG, ISAACLAB_NAV_TASKS_ASSETS_DIR  # isort: skip
@@ -19,8 +19,57 @@ from isaaclab_nav_task.navigation.assets import B2W_CFG, ISAACLAB_NAV_TASKS_ASSE
 LEG_JOINT_NAMES = [".*hip_joint", ".*thigh_joint", ".*calf_joint"]
 WHEEL_JOINT_NAMES = [".*foot_joint"]
 
+
+@configclass
+class B2WRewardsCfg(RewardsCfg):
+    """B2W rewards: official reward set, recalibrated so that moving always beats standing.
+
+    Why: the official set pays -5.8 (`action_rate_l1`) -0.5 (`lateral_movement`) per episode for
+    moving, while every one of those penalties is exactly 0 when the robot stands still, and the
+    goal terms are gated to the last 4 s + 1% of steps - so "stand still for 60 s" was the return-
+    optimal policy (measured: standing ~-5.6 vs a moving policy ~-13). The terms below follow the
+    reward set that is already validated in-repo on Go2W (SR 0.08 -> 0.98 from scratch):
+    dense single-point goal progress, 5x smaller smoothness penalties, and a timeout penalty that
+    dominates the cost of moving.
+
+    RewardManager multiplies every term by dt (0.2 s), so per episode:
+      progress       : +1.5 per metre advanced towards the goal
+      reach_goal     : +2.0 per step inside the 0.5 m goal radius (early-terminates after 4 s)
+      action_rate_l1 : ~-1.2 (was ~-5.8)
+      lateral        : ~-0.1
+      time_out       : -20.0 on a true 60 s horizon timeout
+    """
+
+    # Dense, ungated progress towards the goal. `progress_to_goal` returns (d_prev - d_now) / step_dt,
+    # so weight * step_dt = 1.5 return per metre. Shares `env._progress_prev_dist` with
+    # `gated_progress_to_goal` - only one of the two may be active.
+    progress = RewTerm(
+        func=mdp.progress_to_goal,
+        weight=1.5,
+        params={"command_name": "robot_goal"},
+    )
+    # Sparse terminal bonus for actually entering the goal radius.
+    reach_goal = RewTerm(
+        func=mdp.reach_goal_direct,
+        weight=10.0,
+        params={"command_name": "robot_goal", "distance_threshold": 0.5},
+    )
+
+    # Lower the cost of moving below the reward for moving (official Go2W values).
+    action_rate_l1 = RewTerm(func=mdp.action_rate_l1, weight=-0.02)
+    lateral_movement = RewTerm(func=mdp.lateral_movement, weight=-0.02)
+
+    # 60 s horizon timeout penalty. Must exceed the ~6.0 return a standing robot saves in
+    # smoothness penalties, with margin for the noisier actions seen early in learning.
+    time_out_penalty = RewTerm(func=mdp.episode_time_out, weight=-100.0)
+
+
 @configclass
 class B2WNavigationEnvCfg(NavigationEnvCfg):
+    # Go2W's deployment config (`Go2WRewardsCfg`) inherits the base `RewardsCfg` and is untouched.
+    # `Go2WNavigationEnvCfg_Paper` deliberately inherits this class, so it gets this reward set too.
+    rewards: B2WRewardsCfg = B2WRewardsCfg()
+
     def __post_init__(self):
         super().__post_init__()
 

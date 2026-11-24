@@ -118,6 +118,13 @@ def main():
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     # Write git state to log
     runner.add_git_repo_to_log(__file__)
+    # Also record the sim extension that is *actually imported at runtime*. When training is
+    # launched from the official meta-repo (`sru-path-aware-official/sru-navigation-sim/scripts/
+    # train.py`), `__file__` resolves to a copy of sru-navigation-sim that is not the executed one
+    # - the pip-installed editable `isaaclab_nav_task` wins. Without this line the run snapshot
+    # records reward/MDP edits that never ran, and omits the ones that did.
+    # (store_code_state dedupes by repo name, so a same-repo `__file__` is harmless.)
+    runner.add_git_repo_to_log(isaaclab_nav_task.__file__)
     # Save configuration
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
