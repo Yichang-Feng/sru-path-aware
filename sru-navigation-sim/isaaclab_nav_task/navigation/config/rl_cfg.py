@@ -56,6 +56,17 @@ class RslRlPpoActorCriticCfg:
     height_input_dims: tuple[int, int, int] = (64, 7, 7)
     """Encoded height scan feature shape as (C, H, W). Default is (64, 7, 7) for 64*7*7=3136 features."""
 
+    # Action noise bounds, applied by ActorCriticSRU.update_distribution.
+    # Left unbounded, log_std is pushed up by the entropy bonus with no restoring force: the B2W
+    # run of 2026-11-23 reached std = 8.49 by iteration 3000, saturating tanh and making
+    # action_rate_l1 the largest single cost. The defaults below apply to every task that does not
+    # override them and keep the sampled std in [0.082, 1.22].
+    log_std_min: float = -2.5
+    """Lower bound on the policy's log standard deviation."""
+
+    log_std_max: float = 0.2
+    """Upper bound on the policy's log standard deviation."""
+
 
 @configclass
 class RslRlPpoAlgorithmCfg:

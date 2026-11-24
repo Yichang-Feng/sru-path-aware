@@ -40,6 +40,9 @@ class B2WNavMDPORunnerCfg(RslRlOnPolicyRunnerCfg):
         num_cameras=1,
         image_input_dims=(64, 5, 8),  # depth image: 64 channels * 5 * 8 = 2560
         height_input_dims=(64, 7, 7),  # encoded height_scan_critic: 64*7*7 = 3136
+        # Bound the exploration noise (std in [0.082, 1.22]). See `rl_cfg.py` for why.
+        log_std_min=-2.5,
+        log_std_max=0.2,
     )
     algorithm = RslRlPpoAlgorithmCfg(
         class_name="MDPO",
@@ -47,7 +50,9 @@ class B2WNavMDPORunnerCfg(RslRlOnPolicyRunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         value_clip_param=0.2,
-        entropy_coef=0.00375,
+        # 0.00375 kept pushing log_std up with no restoring force; lowered so the entropy bonus
+        # no longer dominates the (weaker) advantage signal on log_std.
+        entropy_coef=0.001,
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=1.0e-3,

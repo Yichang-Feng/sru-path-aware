@@ -209,6 +209,11 @@ run 里 σ 也涨到过 20。**这套代码对 σ 没有任何约束，两个方
 
 ## 5. 下一步建议（按优先级）
 
+> **更新（2026-11-24）**：#1 与 #2 已实施（commit `304d58b`）。
+> `ActorCriticSRU` 的 `log_std` 现在被限制在 `[-2.5, 0.2]`（std ∈ [0.082, 1.22]），
+> 由 `RslRlPpoActorCriticCfg.log_std_min/log_std_max` 配置并会写进 `agent.yaml`；
+> B2W MDPO 的 `entropy_coef` 从 0.00375 降到 0.001。以下是原始判断，保留作为依据。
+
 | # | 改动 | 位置 | 预期 |
 |---|---|---|---|
 | 1 | **给 `log_std` 加上界**，如 `torch.clamp(log_std, -2.5, 0.2)`（σ ≤ 1.22） | `rsl_rl/modules/actor_critic_sru.py`（官方 submodule，一行） | σ 收敛，`action_rate` 回到 ≈ -2，`base_contact` 有望从 0.50 降下来 |

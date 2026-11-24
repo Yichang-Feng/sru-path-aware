@@ -69,6 +69,8 @@ class ActorCriticSRU(nn.Module):
         path_length: int = 60,
         path_embed_dim: int = 32,
         path_input_dim: int = 4,
+        log_std_min: float = -2.5,
+        log_std_max: float = 0.2,
         **kwargs,
     ):
         if kwargs:
@@ -204,6 +206,9 @@ class ActorCriticSRU(nn.Module):
         print(f"[ActorCriticSRU] Path encoder: {self.attn_path_net}")
         # Action noise: using log_std parameter
         self.log_std = nn.Parameter(torch.log(init_noise_std * torch.ones(num_actions)))
+        # Bounds applied when the distribution is built (see `update_distribution`).
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
         self.distribution = None
         Normal.set_default_validate_args(False)
 
@@ -420,9 +425,19 @@ class ActorCriticSRU(nn.Module):
         return torch.cat([combined_features, path_embed, time_embed], dim=-1)
 
     def update_distribution(self, combined_features):
-        """Update the action distribution based on actor output."""
+        """Update the action distribution based on actor output.
+
+        `log_std` is clamped before exponentiation. Unbounded, it has no restoring force: the
+        entropy bonus keeps pushing it up and the advantage term does not pull it back once the
+        task reward is dense enough to survive the noise. On the B2W navigation run of
+        2026-11-23 it ran from 0.71 to 8.49 over 3000 iterations, which saturates `tanh` (the
+        policy emits bang-bang velocity commands) and makes `action_rate_l1` the largest single
+        cost (-12.9 per episode). The clamp bounds the behaviour only; the parameter itself stays
+        free so the optimiser state remains consistent.
+        """
         mean = self.actor(combined_features)
-        std = self.log_std.exp().expand_as(mean)
+        log_std = torch.clamp(self.log_std, min=self.log_std_min, max=self.log_std_max)
+        std = log_std.exp().expand_as(mean)
         self.distribution = Normal(mean, std)
 
     def act(self, observations, masks=None, hidden_states=None, dropout_masks=None):
