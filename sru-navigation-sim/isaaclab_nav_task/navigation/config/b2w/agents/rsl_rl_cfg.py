@@ -40,9 +40,12 @@ class B2WNavMDPORunnerCfg(RslRlOnPolicyRunnerCfg):
         num_cameras=1,
         image_input_dims=(64, 5, 8),  # depth image: 64 channels * 5 * 8 = 2560
         height_input_dims=(64, 7, 7),  # encoded height_scan_critic: 64*7*7 = 3136
-        # Bound the exploration noise (std in [0.082, 1.22]). See `rl_cfg.py` for why.
+        # 30 waypoints * 4 floats: 15 global path points + 15 local path points (6 m lookahead).
+        path_length=120,
+        # Bound the exploration noise (std in [0.082, 1.22]). `log_std_max` is only the *initial*
+        # ceiling here: the MDPO log_std schedule below moves it down over training.
         log_std_min=-2.5,
-        log_std_max=0.2,
+        log_std_max=0.1,
     )
     algorithm = RslRlPpoAlgorithmCfg(
         class_name="MDPO",
@@ -50,17 +53,32 @@ class B2WNavMDPORunnerCfg(RslRlOnPolicyRunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         value_clip_param=0.2,
-        # 0.00375 kept pushing log_std up with no restoring force; lowered so the entropy bonus
-        # no longer dominates the (weaker) advantage signal on log_std.
+        # Entropy bonus annealed to zero: it must not keep pushing log_std up for the whole run.
         entropy_coef=0.001,
+        entropy_schedule="cosine",
+        min_entropy_coef=0.0,
+        entropy_hold_iters=500,
+        entropy_decay_span=3500,
         num_learning_epochs=5,
         num_mini_batches=4,
+        # Cosine decay to a 1e-4 floor. NOT "adaptive": MDPO does not implement it and the LR would
+        # silently stay frozen at its initial value for the whole run.
         learning_rate=1.0e-3,
-        schedule="exponential",
+        min_learning_rate=1.0e-4,
+        schedule="cosine",
         gamma=0.999,
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
+        # Moving ceiling on the action noise: 0.1 -> -0.6 (iter 1000-5000) -> -1.0 (iter 5000-8000).
+        # A one-off clamp cannot work - log_std parks on the wall with zero gradient.
+        log_std_schedule="cosine",
+        log_std_anneal_start=1000,
+        log_std_anneal_mid=5000,
+        log_std_anneal_end=8000,
+        log_std_max_initial=0.1,
+        log_std_max_mid=-0.6,
+        log_std_max_final=-1.0,
     )
 
 
@@ -101,6 +119,10 @@ class B2WNavPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         num_cameras=1,
         image_input_dims=(64, 5, 8),  # depth image: 64 channels * 5 * 8 = 2560
         height_input_dims=(64, 7, 7),  # encoded height_scan_critic: 64*7*7 = 3136
+        path_length=120,  # 15 global + 15 local path waypoints * 4 floats
+        # Same noise bounds as the MDPO task, minus the moving-wall schedule (PPO has no hook).
+        log_std_min=-2.5,
+        log_std_max=0.1,
     )
     algorithm = RslRlPpoAlgorithmCfg(
         class_name="PPO",

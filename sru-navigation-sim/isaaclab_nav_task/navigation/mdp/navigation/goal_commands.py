@@ -39,12 +39,21 @@ from isaaclab.utils.math import subtract_frame_transforms, transform_points, yaw
 from isaaclab_nav_task.navigation.mdp.math_utils import vec_to_quat
 from isaaclab_nav_task.terrains.terrain_constants import VERTICAL_SCALE
 
-from .path_generator import MultiPath
+from .path_generator import MultiPath, set_path_curriculum_iteration
 from .prm import MultiPRM
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
     from .goal_commands_cfg import RobotNavigationGoalCommandCfg
+
+
+GOAL_DWELL_TIME_S: float = 1.5
+"""Consecutive seconds inside the goal radius required to count as a successful arrival.
+
+The previous rule latched "ever touched the radius" (`time_at_goal > 0`) and kept counting after the
+robot left, so brushing past the goal at speed counted as success after 4 s. Success now requires
+staying inside the radius for this long, with the counter reset on exit.
+"""
 
 
 # =============================================================================
@@ -377,9 +386,14 @@ class RobotNavigationGoalCommand(CommandTerm):
 
     def _init_tracking_buffers(self):
         """Initialize goal tracking buffers."""
+        # Consecutive steps inside the goal radius. Reset to 0 the moment the robot leaves the radius,
+        # so "success" means actually stopping at the goal, not clipping its edge (see
+        # `terminations.at_goal_navigation`).
         self.steps_at_goal = torch.zeros(self.num_envs, device=self.device)
         self.time_at_goal = torch.zeros(self.num_envs, device=self.device)
-        self.required_steps_at_goal = 4.0 / self.env.step_dt
+        self.required_steps_at_goal = int(round(GOAL_DWELL_TIME_S / self.env.step_dt))
+        # Single-step pulse on the step the dwell requirement is met (read by `goal_reached_bonus`).
+        self.goal_dwell_completed = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         self.initial_distance_to_goal = torch.zeros(self.num_envs, device=self.device)
         self.distance_to_goal = torch.zeros(self.num_envs, device=self.device)
@@ -392,11 +406,18 @@ class RobotNavigationGoalCommand(CommandTerm):
         self.success_tracker = SuccessRateTracker(self.num_envs, self.device, buffer_size=10)
         self.success_rate_buffer = torch.full((self.num_envs, 10), -1.0, device=self.device)
 
+        # One cached copy of `MultiPath.get_all_path_metrics()`, produced exactly once per step in
+        # `_update_command` (the call is stateful - see its docstring) and shared by every consumer.
+        self._cached_path_dist: Optional[torch.Tensor] = None
+        self._cached_path_progress: Optional[torch.Tensor] = None
+
     def _init_metrics(self):
         """Initialize performance metrics."""
         self.metrics["velocity_toward_goal"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["velocity_magnitude"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["success_rate"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["distance_to_path"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["path_progress"] = torch.zeros(self.num_envs, device=self.device)
 
     # =========================================================================
     # Command Interface
@@ -431,11 +452,48 @@ class RobotNavigationGoalCommand(CommandTerm):
         return torch.zeros((self.num_envs, num_pts, 4), dtype=torch.float32, device=self.device)
 
     def get_path_metrics(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Distance to path and progress-along-path, both `(num_envs,)` - see `MultiPath.get_all_path_metrics`."""
+        """Distance to path and progress-along-path, both `(num_envs,)`.
+
+        Returns the value cached by the single `MultiPath.get_all_path_metrics()` call made in
+        `_update_command` this step. `MultiPath.get_all_path_metrics` consumes its own state and is
+        therefore *not* safe to call twice; every consumer (rewards, observations, logging) goes
+        through this cached accessor instead. If nothing has been cached yet (the very first step),
+        it computes once and keeps the result.
+        """
+        if self._cached_path_dist is None:
+            self._refresh_path_metrics()
+        return self._cached_path_dist, self._cached_path_progress
+
+    def _refresh_path_metrics(self):
+        """The single per-step `get_all_path_metrics()` call (see `get_path_metrics`).
+
+        Timing note: `ManagerBasedRLEnv.step()` computes rewards *before* commands, so the value
+        cached here is what the rewards read on the **next** step - a one-step lag on a dense shaping
+        term. That is deliberate: computing the metrics inside a reward term instead would make them
+        advance twice per step (once for the reward, once for the observation), and the metric is
+        stateful.
+        """
         pm = self._require_paths_manager()
-        if pm is not None:
-            return pm.get_all_path_metrics()
-        return torch.zeros(self.num_envs, device=self.device), torch.zeros(self.num_envs, device=self.device)
+        if pm is None:
+            zeros = torch.zeros(self.num_envs, device=self.device)
+            self._cached_path_dist, self._cached_path_progress = zeros, zeros.clone()
+        else:
+            self._cached_path_dist, self._cached_path_progress = pm.get_all_path_metrics()
+
+    def get_path_local(self, horizon_m: float = 6.0) -> torch.Tensor:
+        """Local body-frame path from the tracker forward `horizon_m` metres, `(num_envs, 15, 4)`."""
+        pm = self._require_paths_manager()
+        if pm is None:
+            num_pts = getattr(self.cfg.path_cfg, "num_smooth_points", 15)
+            return torch.zeros((self.num_envs, num_pts, 4), dtype=torch.float32, device=self.device)
+        return pm.get_path_local(horizon_m)
+
+    def get_relax_at_nearest(self) -> torch.Tensor:
+        """Whether each env's nearest path segment is relaxed (post-obstacle) - see `MultiPath`."""
+        pm = self._require_paths_manager()
+        if pm is None:
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        return pm.get_relax_at_nearest()
 
     # =========================================================================
     # Position Sampling
@@ -620,11 +678,17 @@ class RobotNavigationGoalCommand(CommandTerm):
         """Reset tracking state for specified environments."""
         self.steps_at_goal[env_ids] = 0
         self.time_at_goal[env_ids] = 0
+        self.goal_dwell_completed[env_ids] = False
         self.total_distance_traveled[env_ids] = 0.0
         self.previous_position[env_ids] = self.robot.data.root_pos_w[env_ids].clone()
 
     def _update_command(self):
         """Update command in body frame."""
+        # Path curricula (e.g. the blocking-event ramp) key off the training iteration, approximated
+        # from the environment's global step counter. 16 = `num_steps_per_env` of both B2W runner
+        # configurations; the ramp is coarse (2000 iterations), so this approximation is harmless.
+        set_path_curriculum_iteration(int(getattr(self.env, "common_step_counter", 0)) // 16)
+
         # Transform goal to body frame
         inverse_pos, inverse_rot = subtract_frame_transforms(
             self.robot.data.root_pos_w,
@@ -651,6 +715,9 @@ class RobotNavigationGoalCommand(CommandTerm):
         self.paths_manager.update(
             inverse_pos, inverse_rot, self.robot.data.root_pos_w, self.robot.data.root_quat_w
         )
+
+        # The one and only stateful metrics call for this step - see `get_path_metrics`.
+        self._refresh_path_metrics()
 
         self._update_distance_tracking()
 
@@ -688,6 +755,21 @@ class RobotNavigationGoalCommand(CommandTerm):
         direction_to_goal = position_error_2d / torch.clamp(torch.norm(position_error_2d, dim=1, keepdim=True), min=1e-6)
         self.metrics["velocity_toward_goal"] = (velocity_2d * direction_to_goal).sum(dim=1)
         self.metrics["success_rate"] = self.success_tracker.get_success_rate()
+
+        # Path tracking diagnostics (from the cache filled in `_update_command`).
+        if self._cached_path_dist is not None:
+            self.metrics["distance_to_path"] = self._cached_path_dist
+            self.metrics["path_progress"] = self._cached_path_progress
+
+        # Path *quality* diagnostics, straight off the per-episode segment masks. `invalid_seg_frac`
+        # is the assertion on path quality (dilation does not change it); `relax_frac` is the part of
+        # the path the robot is deliberately allowed to cut. Mixing the two would hide real regressions.
+        pm = self.paths_manager
+        if pm is not None:
+            self.metrics["invalid_seg_frac"] = (~pm.seg_passable).float().mean(dim=1)
+            self.metrics["relax_frac"] = pm.relax_mask.float().mean(dim=1)
+            self.metrics["pinch_frac"] = pm.pinch_mask.float().mean(dim=1)
+            self.metrics["blocked_episode"] = pm.push_per_seg.gt(0.0).any(dim=1).float()
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         """Reset command generator and compute episode metrics."""

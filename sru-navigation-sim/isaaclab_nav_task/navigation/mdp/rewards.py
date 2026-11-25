@@ -70,6 +70,8 @@ def reach_goal_xyz(
     probability: float,
     flat: bool,
     ratio: bool,
+    instant_arrive: bool = False,
+    arrive_threshold: float = 0.5,
 ) -> torch.Tensor:
     """Reward goal reaching with configurable sigmoid shaping.
 
@@ -81,6 +83,10 @@ def reach_goal_xyz(
         probability: Probability of random sampling.
         flat: Whether to only consider xy error (ignore z).
         ratio: Whether to scale by travel distance ratio.
+        instant_arrive: Gate the term on the *current* distance instead of the legacy
+            "ever entered the radius" latch (`time_at_goal > 0`). The latch keeps paying this term
+            after the robot has left the goal, which turns it into free reward for wandering nearby.
+        arrive_threshold: Radius (m) used by `instant_arrive`.
 
     Returns:
         Dense reward based on distance to goal.
@@ -101,7 +107,11 @@ def reach_goal_xyz(
     random_mask = torch.rand_like(t.float()) < probability
     timeup_mask = torch.logical_or(timeup_mask, random_mask)
 
-    arrive_mask = goal_cmd_generator.time_at_goal > 0.0
+    if instant_arrive:
+        xy_error_2d = torch.norm(goal_cmd_generator._get_unscaled_command()[:, :2], dim=1)
+        arrive_mask = xy_error_2d < arrive_threshold
+    else:
+        arrive_mask = goal_cmd_generator.time_at_goal > 0.0
     reward_mask = torch.logical_or(timeup_mask, arrive_mask)
 
     if ratio:
@@ -118,7 +128,41 @@ def reach_goal_xyz(
     return reward
 
 
-def progress_along_path(env: ManagerBasedRLEnv, command_name: str, probability: float) -> torch.Tensor:
+def goal_reached_bonus(env: ManagerBasedRLEnv, command_name: str = "robot_goal") -> torch.Tensor:
+    """One-shot bonus paid on the single step the robot completes its goal dwell.
+
+    `RobotNavigationGoalCommand.goal_dwell_completed` is a one-step pulse set by
+    `terminations.at_goal_navigation` (which runs before the reward manager in `env.step()`), so this
+    term fires exactly once per successful episode and never on the same env twice.
+
+    The reward manager multiplies every term by `dt`, so the pulse is divided by `env.step_dt` here to
+    make the configured weight the actual one-shot amount (otherwise a "25" would pay 5).
+    """
+    goal_cmd: RobotNavigationGoalCommand = env.command_manager.get_term(command_name)
+    return goal_cmd.goal_dwell_completed.float() / env.step_dt
+
+
+def path_deviation_penalty(
+    env: ManagerBasedRLEnv,
+    command_name: str = "robot_goal",
+    corridor_radius: float = 0.5,
+    cap: float = 1.5,
+) -> torch.Tensor:
+    """Penalty for straying outside a corridor around the planned path.
+
+    Zero inside `corridor_radius` (the path may well hug a wall - that is expected and allowed), and
+    clamped at `cap` metres of excess, so a large shortcut is not punished without bound. Segments
+    whose neighbourhood is relaxed (`MultiPath.relax_mask`) are exempt: there the path itself is
+    blocked or passes a new obstacle, so leaving it is the *correct* behaviour.
+    """
+    goal_cmd: RobotNavigationGoalCommand = env.command_manager.get_term(command_name)
+    distance, _ = goal_cmd.get_path_metrics()
+    relax = goal_cmd.get_relax_at_nearest().float()
+    excess = torch.clamp(distance - corridor_radius, min=0.0, max=cap)
+    return excess * (1.0 - relax)
+
+
+def progress_along_path(env: ManagerBasedRLEnv, command_name: str, probability: float, per_metre: bool = False) -> torch.Tensor:
     """Reward progress made along the global path (PRM + A*, spawn to goal) since the last check.
 
     Args:
@@ -126,6 +170,10 @@ def progress_along_path(env: ManagerBasedRLEnv, command_name: str, probability: 
         command_name: Name of the goal command.
         probability: Probability of applying the reward this step (same random-masking pattern as
             the other goal rewards, so it isn't applied identically on every single step).
+        per_metre: Divide by `step_dt` so the configured weight means "reward per metre" instead of
+            "reward per metre per step". The reward manager multiplies every term by `dt`, so without
+            this a weight of 1.2 pays 1.2 * 0.2 = 0.24 per metre. The v2 path metrics are in metres,
+            so the B2W task enables this; the legacy percent-of-path metric leaves it off.
 
     Returns:
         Dense reward proportional to newly-made progress along the path (0 if no progress, or on a
@@ -133,6 +181,8 @@ def progress_along_path(env: ManagerBasedRLEnv, command_name: str, probability: 
     """
     goal_cmd_generator: RobotNavigationGoalCommand = env.command_manager._terms[command_name]
     _, progress = goal_cmd_generator.get_path_metrics()
+    if per_metre:
+        progress = progress / env.step_dt
     random_mask = (torch.rand(env.num_envs, device=env.device) < probability).float()
     return progress * random_mask
 
@@ -156,7 +206,7 @@ def backward_movement_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg 
 
 
 def episode_time_out(env: "ManagerBasedRLEnv") -> torch.Tensor:
-    """Return one for environments whose 60 s episode horizon ends on this step.
+    """Return one for environments whose episode horizon ends on this step.
 
     This is intentionally distinct from the generic ``termination_manager.time_outs``
     signal: successful early termination and terrain fall are also marked as time-outs

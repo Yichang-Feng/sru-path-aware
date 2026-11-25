@@ -56,6 +56,15 @@ class RslRlPpoActorCriticCfg:
     height_input_dims: tuple[int, int, int] = (64, 7, 7)
     """Encoded height scan feature shape as (C, H, W). Default is (64, 7, 7) for 64*7*7=3136 features."""
 
+    path_length: int = 60
+    """Flattened length of the path observation the network splits off, in floats.
+
+    Must match `num_waypoints * 4` for the path terms actually configured (global path 15 * 4 = 60;
+    adding the local path term makes it 30 waypoints = 120). The network assumes the path block sits
+    immediately before the image block - adding path terms without bumping this silently moves them
+    into the proprioceptive block instead.
+    """
+
     # Action noise bounds, applied by ActorCriticSRU.update_distribution.
     # Left unbounded, log_std is pushed up by the entropy bonus with no restoring force: the B2W
     # run of 2026-11-23 reached std = 8.49 by iteration 3000, saturating tanh and making
@@ -110,6 +119,33 @@ class RslRlPpoAlgorithmCfg:
     entropy_schedule: str = "fixed"
     """Anneal `entropy_coef` from its initial value down to `min_entropy_coef` ("fixed" | "cosine"
     | "linear" | "exponential"). "fixed" keeps the constant value."""
+
+    log_std_schedule: str = "fixed"
+    """Move the *upper* clamp on the policy's `log_std` over training ("fixed" | "cosine").
+
+    A one-off reduction does not work: `torch.clamp` passes zero gradient for out-of-bounds values, so
+    a `log_std` sitting on the wall stays pinned there and never comes back down. Instead the wall
+    itself moves: `log_std_max_initial` at step 0, `log_std_max_mid` at `log_std_anneal_mid`, and
+    `log_std_max_final` at `log_std_anneal_end`, cosine-interpolated in between. "fixed" keeps the
+    static `RslRlPpoActorCriticCfg.log_std_max`, which is what every other task gets."""
+
+    log_std_anneal_start: int = 1000
+    """Iteration at which the `log_std_max` schedule starts (held at the initial value before)."""
+
+    log_std_anneal_mid: int = 5000
+    """Iteration at which the wall reaches `log_std_max_mid`."""
+
+    log_std_anneal_end: int = 8000
+    """Iteration at which the wall reaches `log_std_max_final` and stays there."""
+
+    log_std_max_initial: float = 0.1
+    """`log_std_max` used at the start of the schedule."""
+
+    log_std_max_mid: float = -0.6
+    """`log_std_max` at `log_std_anneal_mid`."""
+
+    log_std_max_final: float = -1.0
+    """`log_std_max` from `log_std_anneal_end` on."""
 
     num_learning_epochs: int = MISSING
     """The number of learning epochs per update."""

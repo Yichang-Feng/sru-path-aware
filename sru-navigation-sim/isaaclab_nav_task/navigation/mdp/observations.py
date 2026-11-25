@@ -511,6 +511,43 @@ def generated_path_reshaped(
     return path
 
 
+def generated_path_local_reshaped(
+    env: ManagerBasedRLEnv, command_name: str = "robot_goal", flatten: bool = True, horizon_m: float = 6.0
+) -> torch.Tensor:
+    """The *local* path ahead of the robot, in body frame, encoded like `generated_path_reshaped`.
+
+    The global path spans the whole route (15 points over up to 40 m, i.e. 2-3 m apart), so it cannot
+    resolve a doorway or a stair edge. This term always covers the next `horizon_m` metres from the
+    path tracker, with the same `(direction_xyz, normalised log distance)` encoding and the same
+    waypoint count.
+
+    Args:
+        env: The learning environment.
+        command_name: The name of the goal command.
+        flatten: Whether to flatten the per-waypoint encoding into a single vector.
+        horizon_m: Lookahead distance in metres.
+
+    Returns:
+        `(num_envs, num_waypoints, 4)`, or `(num_envs, num_waypoints * 4)` when flattened.
+    """
+    goal_cmd_generator: RobotNavigationGoalCommand = env.command_manager._terms[command_name]
+    path = goal_cmd_generator.get_path_local(horizon_m)
+    if flatten:
+        return path.flatten(start_dim=1)
+    return path
+
+
+def distance_to_path(env: ManagerBasedRLEnv, command_name: str = "robot_goal") -> torch.Tensor:
+    """Perpendicular distance from the robot to its planned path, `(num_envs, 1)`.
+
+    Read from the single per-step cache filled by the goal command - calling
+    `MultiPath.get_all_path_metrics` again here would consume the progress accounting of that step.
+    """
+    goal_cmd_generator: RobotNavigationGoalCommand = env.command_manager._terms[command_name]
+    distance, _ = goal_cmd_generator.get_path_metrics()
+    return distance.unsqueeze(-1)
+
+
 def time_normalized(env: ManagerBasedRLEnv, command_name: str = "robot_goal") -> torch.Tensor:
     """Time normalized to the maximum episode length.
 

@@ -24,6 +24,35 @@ from isaaclab.utils.math import transform_points
 from .prm import MultiPRM, Prm
 
 
+# Training iteration used to ramp the blocking-event probability (v2 pipeline). The goal command
+# updates this once per step; a module global keeps `GlobalPath` free of an env reference (it is
+# constructed from a `MultiPRM` and a `GlobalPathConfig` only, and is also used offline).
+_PATH_CURRICULUM_ITERATION: int = 0
+
+
+def set_path_curriculum_iteration(iteration: int) -> None:
+    """Set the (approximate) training iteration the path pipeline ramps its curricula on."""
+    global _PATH_CURRICULUM_ITERATION
+    _PATH_CURRICULUM_ITERATION = int(iteration)
+
+
+# --- v2 progress accounting (metres) ---
+SYNC_RATE: float = 1.0
+"""Max distance (m) the path tracker may follow the robot's projection in a single step."""
+
+CONT_TOL: float = 0.5
+"""Progress is only paid while the tracker is within this distance (m) of the projection."""
+
+PAY_CAP: float = 1.5
+"""Max progress (m) paid out on a single step, however far the tracker jumped."""
+
+EPS: float = 0.04
+"""Progress below this (m/step) is noise and is not paid."""
+
+LOCAL_HORIZON_M: float = 6.0
+"""Lookahead (m) covered by the local path observation."""
+
+
 class GlobalPathConfig:
     """Configuration for global path generation."""
 
@@ -36,6 +65,21 @@ class GlobalPathConfig:
         path_categories: list = ["optimal", "mildly_non_optimal", "highly_non_optimal", "infeasible"],
         category_weights: list = [0, 0, 0.5, 0.5],
         visualise: bool = False,
+        # --- path pipeline v2 (see `path_pipeline`) ---
+        path_pipeline: str = "legacy",
+        seg_padding_m: float = 0.31,
+        noise_max_m: float = 0.35,
+        noise_clearance_frac: float = 0.5,
+        noise_reject_tries: int = 5,
+        pinch_clearance_m: float = 0.45,
+        gate_normal_m: float = 0.8,
+        gate_relaxed_m: float = 1.2,
+        gate_invalid_min_m: float = 1.6,
+        gate_invalid_push_margin: float = 0.6,
+        block_prob_start: float = 0.15,
+        block_prob_end: float = 0.30,
+        block_prob_ramp_iters: int = 2000,
+        num_dense_points: int = 64,
     ):
         self.n_waypoints = n_waypoints
         self.num_smooth_points = num_smooth_points
@@ -47,6 +91,25 @@ class GlobalPathConfig:
         self.category_weights = category_weights
         self.visualise = visualise
 
+        # "legacy" keeps the original pipeline byte-for-byte (Go2W depends on it). "v2" is the
+        # B2W path-aware redesign: clearance-adaptive noise on sparse points, locked endpoints,
+        # structured local blocking events, per-segment feasibility masks and a metric progress
+        # gate. See docs/agent_doing.md.
+        self.path_pipeline = path_pipeline
+        self.seg_padding_m = seg_padding_m
+        self.noise_max_m = noise_max_m
+        self.noise_clearance_frac = noise_clearance_frac
+        self.noise_reject_tries = noise_reject_tries
+        self.pinch_clearance_m = pinch_clearance_m
+        self.gate_normal_m = gate_normal_m
+        self.gate_relaxed_m = gate_relaxed_m
+        self.gate_invalid_min_m = gate_invalid_min_m
+        self.gate_invalid_push_margin = gate_invalid_push_margin
+        self.block_prob_start = block_prob_start
+        self.block_prob_end = block_prob_end
+        self.block_prob_ramp_iters = block_prob_ramp_iters
+        self.num_dense_points = num_dense_points
+
     def copy(self) -> "GlobalPathConfig":
         return GlobalPathConfig(
             n_waypoints=self.n_waypoints,
@@ -56,6 +119,20 @@ class GlobalPathConfig:
             path_categories=self.path_categories,
             category_weights=self.category_weights,
             visualise=self.visualise,
+            path_pipeline=self.path_pipeline,
+            seg_padding_m=self.seg_padding_m,
+            noise_max_m=self.noise_max_m,
+            noise_clearance_frac=self.noise_clearance_frac,
+            noise_reject_tries=self.noise_reject_tries,
+            pinch_clearance_m=self.pinch_clearance_m,
+            gate_normal_m=self.gate_normal_m,
+            gate_relaxed_m=self.gate_relaxed_m,
+            gate_invalid_min_m=self.gate_invalid_min_m,
+            gate_invalid_push_margin=self.gate_invalid_push_margin,
+            block_prob_start=self.block_prob_start,
+            block_prob_end=self.block_prob_end,
+            block_prob_ramp_iters=self.block_prob_ramp_iters,
+            num_dense_points=self.num_dense_points,
         )
 
 
@@ -68,6 +145,9 @@ class MultiPath:
         self.num_envs = num_envs
         self.device = device
         self.size_path = cfg_path.num_smooth_points
+        self.num_seg = max(1, self.size_path - 1)
+        self.num_dense = cfg_path.num_dense_points
+        self.metrics_v2 = cfg_path.path_pipeline == "v2"
 
         self.paths: list[GlobalPath] = []
         self.paths_tensor: torch.Tensor = torch.zeros((num_envs, self.size_path, 4), dtype=torch.float32, device=self.device)
@@ -77,6 +157,28 @@ class MultiPath:
         self.closest_point: torch.Tensor = torch.zeros((num_envs, 3), dtype=torch.float32, device=self.device)
         self.final_lookahead: torch.Tensor = torch.zeros((num_envs, 3), dtype=torch.float32, device=self.device)
         self.final_lookahead_normalised: torch.Tensor = torch.zeros((num_envs, 4), dtype=torch.float32, device=self.device)
+
+        # --- v2 per-segment state (see `_store_path`) ---
+        self.seg_passable: torch.Tensor = torch.ones((num_envs, self.num_seg), dtype=torch.bool, device=self.device)
+        self.pinch_mask: torch.Tensor = torch.zeros((num_envs, self.num_seg), dtype=torch.bool, device=self.device)
+        self.push_per_seg: torch.Tensor = torch.zeros((num_envs, self.num_seg), dtype=torch.float32, device=self.device)
+        self.seg_gate: torch.Tensor = torch.full(
+            (num_envs, self.num_seg), float(cfg_path.gate_normal_m), dtype=torch.float32, device=self.device
+        )
+        self.relax_mask: torch.Tensor = torch.zeros((num_envs, self.num_seg), dtype=torch.bool, device=self.device)
+        self.paths_dense_w: torch.Tensor = torch.zeros(
+            (num_envs, self.num_dense, 3), dtype=torch.float32, device=self.device
+        )
+        self.cum_dense: torch.Tensor = torch.zeros((num_envs, self.num_dense), dtype=torch.float32, device=self.device)
+        # Arc-length bookkeeping for the metric progress gate (v2): the tracked position and the
+        # position already paid for, both in metres along the planned path.
+        self.s_track: torch.Tensor = torch.zeros((num_envs,), dtype=torch.float32, device=self.device)
+        self.s_reward: torch.Tensor = torch.zeros((num_envs,), dtype=torch.float32, device=self.device)
+        self._last_inv_pos: Optional[torch.Tensor] = None
+        self._last_inv_rot: Optional[torch.Tensor] = None
+        self._last_metrics: Optional[tuple[torch.Tensor, torch.Tensor]] = None
+        self._last_idx_glob: Optional[torch.Tensor] = None
+        self._last_advance: Optional[torch.Tensor] = None
 
         self.build_all(cfg_path.copy())
 
@@ -99,10 +201,7 @@ class MultiPath:
             start = tuple(starts[env_id].tolist()) if starts is not None else None
             goal = tuple(goals[env_id].tolist()) if goals is not None else None
             self.paths.append(self.path_class(cfg_path.copy(), env_id, prm, start, goal))
-            self.paths_tensor[env_id, : cfg_path.num_smooth_points] = self.paths[env_id].path_b
-            self.paths_w[env_id, : cfg_path.num_smooth_points] = self.paths[env_id].path_w
-            self.paths_unscaled[env_id, : cfg_path.num_smooth_points] = self.paths[env_id].path_b_unscaled
-            self.last_best_progress[env_id] = 0.0
+            self._store_path(env_id, cfg_path)
         print(f"[MultiPath] Built paths for {self.num_envs} environments.")
 
     def rebuild(self, cfg_path: GlobalPathConfig, starts: torch.Tensor, goals: torch.Tensor, tile_ids: torch.Tensor, env_ids: Sequence[int]):
@@ -135,10 +234,72 @@ class MultiPath:
             prm.reset_start_goal(start_goal[0], start_goal[1])
 
             self.paths[env_id].find_path()
-            self.paths_tensor[env_id, : cfg_path.num_smooth_points] = self.paths[env_id].path_b
-            self.paths_w[env_id, : cfg_path.num_smooth_points] = self.paths[env_id].path_w
-            self.paths_unscaled[env_id, : cfg_path.num_smooth_points] = self.paths[env_id].path_b_unscaled
-            self.last_best_progress[env_id] = 0.0
+            self._store_path(env_id, cfg_path)
+
+    def _store_path(self, env_id: int, cfg_path: GlobalPathConfig) -> None:
+        """Copy one env's freshly generated path (and its v2 per-segment state) into the batched tensors."""
+        path = self.paths[env_id]
+        self.paths_tensor[env_id, : cfg_path.num_smooth_points] = path.path_b
+        self.paths_w[env_id, : cfg_path.num_smooth_points] = path.path_w
+        self.paths_unscaled[env_id, : cfg_path.num_smooth_points] = path.path_b_unscaled
+        self.last_best_progress[env_id] = 0.0
+        self.s_track[env_id] = 0.0
+        self.s_reward[env_id] = 0.0
+
+        self.seg_passable[env_id] = torch.as_tensor(path.seg_passable, device=self.device, dtype=torch.bool)
+        self.pinch_mask[env_id] = torch.as_tensor(path.pinch_mask, device=self.device, dtype=torch.bool)
+        self.push_per_seg[env_id] = torch.as_tensor(path.push_per_seg, device=self.device, dtype=torch.float32)
+        # Recompute the derived masks over the whole batch: they are (num_envs x 14) tensor ops, far
+        # cheaper than maintaining a second per-env code path with different tensor ranks.
+        self.relax_mask = self._compute_relax(self.seg_passable, self.pinch_mask)
+        self.seg_gate = self._compute_gates(self.seg_passable, self.relax_mask, self.push_per_seg, cfg_path)
+
+        # Dense path in world coordinates, plus its cumulative arc length (metres).
+        if path.prm is not None and np.any(path.path_dense):
+            dense_w = path.prm.rescale_points_to_world(
+                torch.as_tensor(path.path_dense, dtype=torch.float32, device=self.device)
+            )
+            self.paths_dense_w[env_id] = dense_w
+            seg = torch.norm(dense_w[1:] - dense_w[:-1], dim=-1)
+            self.cum_dense[env_id, 0] = 0.0
+            self.cum_dense[env_id, 1:] = torch.cumsum(seg, dim=0)
+
+    def _compute_relax(self, seg_passable: torch.Tensor, pinch_mask: torch.Tensor) -> torch.Tensor:
+        """Two-sided dilation of the invalid segments, excluding pinch (narrow doorway) neighbourhoods.
+
+        Only expanding downstream would punish a robot that starts swerving 1-2 m early (its projection
+        is still on the upstream, valid segment), which trains late "brake at the wall" behaviour.
+        `torch.roll` is deliberately avoided: it would wrap segment 0 into the last segment's state.
+        """
+        inv = ~seg_passable
+        pad = torch.zeros((inv.shape[0], 1), dtype=torch.bool, device=inv.device)
+        left = torch.cat([pad, inv[:, :-1]], dim=1)
+        right = torch.cat([inv[:, 1:], pad], dim=1)
+        return (inv | left | right) & (~pinch_mask)
+
+    def _compute_gates(
+        self,
+        seg_passable: torch.Tensor,
+        relax_mask: torch.Tensor,
+        push_per_seg: torch.Tensor,
+        cfg_path: GlobalPathConfig,
+    ) -> torch.Tensor:
+        """Three-tier payment gate per segment (normal / relaxed / genuinely-infeasible)."""
+        inv = ~seg_passable
+        gate = torch.full_like(push_per_seg, float(cfg_path.gate_normal_m))
+        gate = torch.where(relax_mask & ~inv, torch.full_like(gate, float(cfg_path.gate_relaxed_m)), gate)
+        invalid_gate = torch.maximum(
+            torch.full_like(gate, float(cfg_path.gate_invalid_min_m)),
+            push_per_seg + float(cfg_path.gate_invalid_push_margin),
+        )
+        gate = torch.where(inv, invalid_gate, gate)
+        return gate
+
+    def get_relax_at_nearest(self) -> torch.Tensor:
+        """Whether the nearest segment of each env is in the "relaxed" (post-obstacle) class."""
+        if self._last_idx_glob is None:
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        return self.relax_mask.gather(1, self._last_idx_glob.unsqueeze(1)).squeeze(1)
 
     def get(self, env_id: int) -> "GlobalPath":
         """Access a specific `GlobalPath`."""
@@ -162,6 +323,8 @@ class MultiPath:
         """
         path_b_unscaled = transform_points(self.paths_w, inv_pos, inv_rot)  # (B, N, 3)
         self.paths_unscaled.copy_(path_b_unscaled)
+        self._last_inv_pos = inv_pos
+        self._last_inv_rot = inv_rot
 
         distances = torch.norm(path_b_unscaled, dim=-1, keepdim=True) + 1e-9
         path_dirs = path_b_unscaled / distances
@@ -247,21 +410,112 @@ class MultiPath:
         self.final_lookahead = final_lookahead
 
     def get_all_path_metrics(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Vectorized distance-to-path and progress-along-path, across all environments.
+        """Distance-to-path and progress-along-path, across all environments.
 
         **Not idempotent - call at most once per sim step.** This isn't a pure query: it mutates
-        `self.last_best_progress` as it computes "progress since last call," so `progress` is only
-        meaningful relative to whenever this was last called. Calling it twice in the same step (e.g.
-        once from a reward term and again from an observation/logging term) will silently zero out
-        `progress` for the second caller, since the delta was already consumed by the first. If more
-        than one consumer needs these metrics in the same step, cache the result of a single call and
-        share it, rather than calling this more than once.
+        `s_track`/`s_reward` (v2) or `last_best_progress` (legacy) as it computes progress, so the
+        returned `progress` is only meaningful relative to whenever this was last called. Calling it
+        twice in the same step (e.g. once from a reward term and again from an observation/logging
+        term) would silently zero out `progress` for the second caller. `RobotNavigationGoalCommand`
+        therefore calls it exactly once per step and caches the result for every consumer.
 
         Returns:
             dists: distance from the robot to the closest point on its path, `(num_envs,)`.
-            progress: progress made since the last call in percent of the total path length
-                (0 if none, or on regression), `(num_envs,)`.
+            progress: v2 - metres advanced along the path and actually paid for on this step (0 if
+                not payable, or on regression). Legacy - percent of the total path length.
         """
+        if self.metrics_v2:
+            return self._v2_path_metrics()
+        return self._legacy_path_metrics()
+
+    def _v2_path_metrics(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Metre-based progress with a rate-limited tracker and a three-tier payment gate.
+
+        The tracker (`s_track`) follows the robot's projection onto the path at no more than
+        `SYNC_RATE` m/step, so a projection that *jumps* across a U-shaped detour cannot bank metres it
+        never walked; the only exception is a jump whose interior contains no passable segment (the
+        robot genuinely went around a blocked one). Credit is paid at most `PAY_CAP` m/step and only
+        while the robot is within `CONT_TOL` m of the tracker and inside the segment's gate.
+        `s_reward` is ratcheted up even when nothing is paid - it never owes, and never pays back.
+        """
+        sync_rate, cont_tol, pay_cap, eps = SYNC_RATE, CONT_TOL, PAY_CAP, EPS
+
+        a = self.paths_unscaled[:, :-1, :]
+        b = self.paths_unscaled[:, 1:, :]
+        seg_vecs = b - a
+        seg_lens = torch.norm(seg_vecs, dim=-1) + 1e-9
+
+        t = (-torch.sum(a * seg_vecs, dim=-1)) / (seg_lens**2)
+        t_clamped = torch.clamp(t, 0.0, 1.0)
+        proj = a + t_clamped.unsqueeze(-1) * seg_vecs
+        dist = torch.norm(proj, dim=-1)
+        d_glob, idx_glob = torch.min(dist, dim=1)
+
+        cum_end = torch.cumsum(seg_lens, dim=1)
+        cum_start = cum_end - seg_lens
+        s_glob = (cum_start + t_clamped * seg_lens).gather(1, idx_glob.unsqueeze(1)).squeeze(1)
+
+        num_seg = seg_lens.shape[1]
+        idx_track = (cum_end < self.s_track.unsqueeze(1)).sum(dim=1).clamp(max=num_seg - 1)
+        vc = torch.cat(
+            [torch.zeros((seg_lens.shape[0], 1), device=seg_lens.device), torch.cumsum(self.seg_passable.float(), dim=1)],
+            dim=1,
+        )
+        lo = torch.minimum(idx_track, idx_glob)
+        hi = torch.maximum(idx_track, idx_glob)
+        n_valid_interior = (
+            vc.gather(1, hi.unsqueeze(1)) - vc.gather(1, (lo + 1).clamp(max=num_seg).unsqueeze(1))
+        ).squeeze(1).clamp(min=0)
+        jump_over_invalid = (n_valid_interior <= 0) & ((s_glob - self.s_track).abs() > sync_rate)
+
+        rate = torch.where(jump_over_invalid, torch.full_like(s_glob, 1.0e9), torch.full_like(s_glob, sync_rate))
+        s_track_new = self.s_track + torch.clamp(s_glob - self.s_track, min=-rate, max=rate)
+
+        gate = self.seg_gate.gather(1, idx_glob.unsqueeze(1)).squeeze(1)
+        payable = ((s_glob - s_track_new).abs() <= cont_tol) & (d_glob <= gate)
+
+        advance = torch.clamp(s_track_new - self.s_reward, min=0.0, max=pay_cap)
+        progress = torch.where(payable & (advance > eps), advance, torch.zeros_like(advance))
+
+        self.s_reward = torch.maximum(self.s_reward, s_track_new)
+        self.s_track = s_track_new
+        self._last_idx_glob = idx_glob
+        self._last_advance = advance
+        return d_glob, progress
+
+    def get_path_local(self, horizon_m: float = LOCAL_HORIZON_M, num_points: Optional[int] = None) -> torch.Tensor:
+        """`(num_envs, num_points, 4)` body-frame path from the tracker forward `horizon_m` metres.
+
+        Unlike the global 15-point path (which spans the whole route and therefore thins out to 2-3 m
+        spacing on a 40 m path), this always covers the next few metres, so the policy sees the actual
+        geometry it is about to drive. Encoded exactly like the global path: unit direction (xyz) plus
+        log distance normalised by the largest distance in the row.
+        """
+        num_points = num_points or self.size_path
+        if self._last_inv_pos is None:
+            return torch.zeros((self.num_envs, num_points, 4), dtype=torch.float32, device=self.device)
+
+        dense_b = transform_points(self.paths_dense_w, self._last_inv_pos, self._last_inv_rot)  # (B, M, 3)
+        targets = self.s_track.unsqueeze(1) + torch.linspace(
+            0.0, horizon_m, num_points, device=self.device
+        ).unsqueeze(0)
+        idx = torch.searchsorted(self.cum_dense.contiguous(), targets.contiguous()).clamp(1, self.num_dense - 1)
+        i1 = idx
+        i0 = idx - 1
+        c0 = self.cum_dense.gather(1, i0)
+        c1 = self.cum_dense.gather(1, i1)
+        w = ((targets - c0) / (c1 - c0 + 1e-9)).clamp(0.0, 1.0).unsqueeze(-1)
+        p0 = dense_b.gather(1, i0.unsqueeze(-1).expand(-1, -1, 3))
+        p1 = dense_b.gather(1, i1.unsqueeze(-1).expand(-1, -1, 3))
+        local_b = p0 + w * (p1 - p0)
+
+        distance = torch.norm(local_b, dim=-1, keepdim=True) + 1e-9
+        log_distance = torch.log(distance + 1.0)
+        max_log = torch.clamp(log_distance.max(dim=1, keepdim=True)[0], min=1e-9)
+        return torch.cat([local_b / distance, log_distance / max_log], dim=-1)
+
+    def _legacy_path_metrics(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Original percent-of-path progress (kept verbatim for the Go2W task)."""
         a = self.paths_unscaled[:, :-1, :]
         b = self.paths_unscaled[:, 1:, :]
         seg_vecs = b - a
@@ -326,6 +580,17 @@ class GlobalPath:
         self.waypoints = []
         self.prm = None
 
+        # v2 pipeline per-segment state. Legacy paths keep the permissive defaults below, which makes
+        # them behave exactly as before (no relaxed gate, no corridor penalty, full payment).
+        num_seg = cfg.num_smooth_points - 1
+        self.seg_passable = np.ones(num_seg, dtype=bool)
+        self.pinch_mask = np.zeros(num_seg, dtype=bool)
+        self.push_per_seg = np.zeros(num_seg, dtype=np.float32)
+        self.path_dense = np.zeros((cfg.num_dense_points, 3), dtype=np.float64)
+        self.block_event: Optional[tuple[int, float]] = None
+        self.category: Optional[str] = None
+        self.a_star_failed: bool = False
+
         if prm is not None:
             self.prm = prm
             self.sample_waypoints()
@@ -355,7 +620,13 @@ class GlobalPath:
         Samples a path category (optimal / mildly non-optimal / highly non-optimal / infeasible) per
         `cfg.path_categories`/`cfg.category_weights`, runs A* accordingly, smooths with line-of-sight,
         and (for infeasible paths) perturbs the result with noise.
+
+        `cfg.path_pipeline == "v2"` routes to :meth:`_find_path_v2` instead, which keeps the same
+        category semantics but replaces the noise/injection/feasibility stages (see that method).
         """
+        if self.cfg.path_pipeline == "v2":
+            return self._find_path_v2()
+
         if self.prm.cfg.start_idx is None or self.prm.cfg.goal_idx is None:
             raise RuntimeError("Start and goal indices must be set in the PRM before finding a path.")
 
@@ -410,6 +681,283 @@ class GlobalPath:
         self.scale_path_to_world()
         if self.cfg.visualise:
             self.visualise(color=(1, 1, 1, 1))
+
+    # =========================================================================
+    # Path pipeline v2
+    # =========================================================================
+
+    def _find_path_v2(self) -> None:
+        """v2 path pipeline: A* -> LOS smoothing -> corner-chord repair -> shaped noise -> blocking event.
+
+        Differences from the legacy `find_path` (which stays untouched so Go2W is unaffected):
+
+        * noise is applied to the **sparse** smoothed waypoints (before resampling), its amplitude is
+          `min(noise_max_m, noise_clearance_frac * clearance)`, candidates are rejection-sampled, and
+          the first/last waypoints are locked to the spawn/goal - so the path can no longer disagree
+          with the goal, and noise never squeezes a waypoint through a wall;
+        * the `infeasible` category no longer means "1 m of noise everywhere"; it means "GBFS path with
+          no LOS smoothing plus one guaranteed structured blocking event" (see `inject_blocking_event`);
+        * every one of the `num_smooth_points - 1` segments gets a feasibility / pinch mask and a
+          payment gate, consumed by `MultiPath.get_all_path_metrics` and the reward terms.
+        """
+        if self.prm.cfg.start_idx is None or self.prm.cfg.goal_idx is None:
+            raise RuntimeError("Start and goal indices must be set in the PRM before finding a path.")
+
+        choice = random.choices(self.cfg.path_categories, weights=self.cfg.category_weights, k=1)[0]
+        self.category = choice
+        if choice == "optimal":
+            optimal, los = True, True
+        elif choice == "mildly_non_optimal":
+            optimal, los = False, True
+        elif choice in ("highly_non_optimal", "infeasible"):
+            optimal, los = False, False
+        else:
+            raise RuntimeError(f"Invalid path category choice: {choice}")
+        if not optimal and self.cfg.n_waypoints > 0:
+            self.sample_waypoints()
+
+        start_node = self.prm.nodes[self.prm.cfg.start_idx].astype(np.float64)
+        goal_node = self.prm.nodes[self.prm.cfg.goal_idx].astype(np.float64)
+        path_segment = self.astar(self.prm.cfg.start_idx, self.prm.cfg.goal_idx, optimal=optimal)
+
+        self.a_star_failed = path_segment.size == 0
+        if self.a_star_failed:
+            print("[GlobalPath] WARNING: A* failed to find a path; falling back to a direct segment.")
+            path = np.vstack([start_node, goal_node])
+        elif los:
+            smoothed, idx = self.smooth_path_los_with_indices(path_segment)
+            path = self.repair_corner_chords(smoothed, path_segment, idx)
+        else:
+            path = self.smooth_path_los_for_non_optimal(path_segment)
+
+        path = self._lock_endpoints(path)
+
+        # 1) clearance-adaptive noise on the sparse waypoints (endpoints stay locked)
+        path = self.add_shaped_noise_to_path(path)
+
+        # 2) resample to the fixed waypoint count, endpoints still locked
+        path = self.resample_path(path, num_points=self.cfg.num_smooth_points)
+        path = self._lock_endpoints(path)
+
+        # 3) at most one structured local blocking event per episode
+        self.block_event = None
+        if choice == "infeasible" or random.random() < self._block_probability():
+            self.block_event = self.inject_blocking_event(path)
+
+        # 4) per-segment feasibility / pinch masks (after noise + injection, before z_offset)
+        self.compute_segment_masks(path)
+
+        # 5) dense equal-arc-length path for progress tracking and the local observation
+        self.build_dense_path(path)
+
+        path = [(x, y, z + self.cfg.z_offset / self.prm.v_scale) for (x, y, z) in path]
+        self.path = path
+        self.scale_path_to_world()
+        if self.cfg.visualise:
+            self.visualise(color=(1, 1, 1, 1))
+
+    def _lock_endpoints(self, path: np.ndarray) -> np.ndarray:
+        """Force the first/last waypoints onto the spawn/goal PRM nodes."""
+        path = np.array(path, dtype=np.float64, copy=True)
+        path[0] = self.prm.nodes[self.prm.cfg.start_idx]
+        path[-1] = self.prm.nodes[self.prm.cfg.goal_idx]
+        return path
+
+    def _block_probability(self) -> float:
+        """Ramped probability of injecting a blocking event (0.15 -> 0.30 over `block_prob_ramp_iters`)."""
+        ramp = max(1, self.cfg.block_prob_ramp_iters)
+        progress = min(max(_PATH_CURRICULUM_ITERATION / ramp, 0.0), 1.0)
+        return self.cfg.block_prob_start + (self.cfg.block_prob_end - self.cfg.block_prob_start) * progress
+
+    def smooth_path_los_with_indices(self, path: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """`smooth_path_los`, also returning which nodes of `path` each kept point came from.
+
+        Unlike the legacy smoother, the line-of-sight test is the *body-width* `segment_passable`, not
+        the PRM's 0.4 m cell dilation. A chord that clips the corner of a 0.8 m doorway can satisfy the
+        cell test while being too narrow for the robot; rejecting it here keeps the doorway crossing
+        straight, which is the one place the path must stay strict.
+        """
+        if path.size == 0:
+            return path, np.zeros(0, dtype=np.int64)
+        smoothed = [path[0]]
+        idx = [0]
+        i = 0
+        while i < len(path) - 1:
+            j = len(path) - 1
+            while j > i + 1:
+                if self.prm.segment_passable(path[i], path[j], self.cfg.seg_padding_m):
+                    break
+                j -= 1
+            smoothed.append(path[j])
+            idx.append(j)
+            i = j
+        return np.array(smoothed), np.array(idx, dtype=np.int64)
+
+    def repair_corner_chords(self, path: np.ndarray, raw: np.ndarray, idx: np.ndarray) -> np.ndarray:
+        """Give an impassable smoothed chord a 50/50 chance of being repaired back into the corner.
+
+        `smooth_path_los` cuts corners; a chord that is not actually passable for the body is exactly
+        the "two endpoints free, everything in between blocked" signature a real obstacle produces.
+        Half the time we restore the original A* corner nodes (a repaired, passable detour); the other
+        half we leave the chord alone and let `compute_segment_masks` mark it invalid.
+        """
+        if len(path) < 2:
+            return path
+        out = [path[0]]
+        for k in range(len(path) - 1):
+            a, b = int(idx[k]), int(idx[k + 1])
+            if b <= a + 1:
+                out.append(path[k + 1])
+                continue
+            p1, p2 = path[k], path[k + 1]
+            impassable = not self.prm.segment_passable(p1, p2, self.cfg.seg_padding_m)
+            is_pinch = self.prm.segment_min_clearance(p1, p2) < self.cfg.pinch_clearance_m
+            if impassable and not is_pinch and random.random() < 0.5:
+                out.extend(raw[a + 1 : b + 1])
+            else:
+                out.append(path[k + 1])
+        # drop consecutive duplicates (restored corners can coincide with the chord endpoints)
+        deduped = [out[0]]
+        for p in out[1:]:
+            if np.linalg.norm(p[:2] - deduped[-1][:2]) > 1e-6:
+                deduped.append(p)
+        if len(deduped) < 2:
+            deduped = [path[0], path[-1]]
+        return np.array(deduped, dtype=np.float64)
+
+    def add_shaped_noise_to_path(self, path: np.ndarray) -> np.ndarray:
+        """Clearance-adaptive, rejection-sampled 2D noise on the interior waypoints.
+
+        Amplitude is `min(noise_max_m, noise_clearance_frac * clearance(p_i))` (metres, converted to
+        height-map cells), so a waypoint in a 0.8 m doorway gets (almost) no noise while an open-floor
+        waypoint gets up to `noise_max_m`. Endpoints are never perturbed: the path's tail must agree
+        with the goal the robot is actually rewarded for reaching.
+        """
+        h_scale = self.prm.h_scale
+        noisy = np.array(path, dtype=np.float64, copy=True)
+        for i in range(1, len(path) - 1):
+            # Never perturb a waypoint that belongs to a pinch (narrow doorway / corridor) segment.
+            # Rejection sampling alone is not enough: it validates the *sparse* segments, but after
+            # resampling a nudged endpoint can still clip the corner of a 0.8 m doorway.
+            if self.prm.segment_min_clearance(path[i - 1], path[i]) < self.cfg.pinch_clearance_m:
+                continue
+            if self.prm.segment_min_clearance(path[i], path[i + 1]) < self.cfg.pinch_clearance_m:
+                continue
+            clearance_m = self.prm.clearance_at(path[i])
+            amp_m = min(self.cfg.noise_max_m, self.cfg.noise_clearance_frac * clearance_m)
+            amp_cells = amp_m / h_scale
+            if amp_cells <= 1e-3:
+                continue
+            for _ in range(max(1, self.cfg.noise_reject_tries)):
+                r = amp_cells * np.sqrt(np.random.uniform(0.0, 1.0))
+                theta = np.random.uniform(0.0, 2.0 * np.pi)
+                candidate = path[i].copy()
+                candidate[0] += r * np.cos(theta)
+                candidate[1] += r * np.sin(theta)
+                if self.prm.segment_passable(path[i - 1], candidate, self.cfg.seg_padding_m) and self.prm.segment_passable(
+                    candidate, path[i + 1], self.cfg.seg_padding_m
+                ):
+                    noisy[i] = candidate
+                    break
+        return noisy
+
+    def inject_blocking_event(self, path: np.ndarray) -> Optional[tuple[int, float]]:
+        """Push one interior waypoint into the nearest wall, faking a newly appeared obstacle.
+
+        This is the *only* way the pipeline produces a genuinely infeasible segment: the path is
+        otherwise geometrically valid. Constraints from the design (all of them protect something
+        specific):
+
+        * clearance in [0.30, 1.00] m - close enough that pushing lands inside the obstacle, and far
+          enough that there is room on the other side to detour;
+        * at least 1.5 m of free space on the opposite side - a detour must exist;
+        * no |dz| > 0.15 m over the three neighbouring waypoints - never inject on stairs or pits;
+        * at least two segments away from any pinch segment - narrow doorways stay strictly valid.
+
+        Returns `(waypoint_index, push_distance_m)` or `None`.
+        """
+        n = len(path)
+        h_scale = self.prm.h_scale
+        candidates = list(range(2, min(n - 2, 12) + 1))
+        random.shuffle(candidates)
+        for i in candidates:
+            p = path[i]
+            clearance_m = self.prm.clearance_at(p)
+            if not (0.30 <= clearance_m <= 1.00):
+                continue
+
+            # never inject on stairs / pit edges
+            dz = max(abs(path[j][2] - p[2]) for j in (i - 1, i, i + 1))
+            if dz > 0.15 / self.prm.v_scale:
+                continue
+
+            # stay at least two segments away from any pinch segment
+            near_pinch = False
+            for j in range(max(0, i - 2), min(n - 1, i + 2)):
+                if self.prm.segment_min_clearance(path[j], path[j + 1]) < self.cfg.pinch_clearance_m:
+                    near_pinch = True
+                    break
+            if near_pinch:
+                continue
+
+            # perpendicular to the local path direction, pointing at the tighter side
+            d = path[i + 1][:2] - path[i - 1][:2]
+            norm = np.linalg.norm(d)
+            if norm < 1e-6:
+                continue
+            perp = np.array([-d[1], d[0]]) / norm
+            probe = np.array([perp[0], perp[1], 0.0]) * (0.2 / h_scale)
+            if self.prm.clearance_at(p + probe) > self.prm.clearance_at(p - probe):
+                perp = -perp
+
+            # the opposite side must stay free for at least 1.5 m
+            free_behind = True
+            for s in np.linspace(0.2, 1.5, 7):
+                behind = p + np.array([-perp[0], -perp[1], 0.0]) * (s / h_scale)
+                if self.prm.clearance_at(behind) <= 0.0:
+                    free_behind = False
+                    break
+            if not free_behind:
+                continue
+
+            push_m = clearance_m + 0.30
+            new_xy = p[:2] + perp * (push_m / h_scale)
+            if self.prm.clearance_at([new_xy[0], new_xy[1], p[2]]) != 0.0:
+                continue
+
+            # z is deliberately left untouched: re-reading the height map here would teleport the
+            # waypoint onto the wall top or into a pit floor.
+            path[i][0], path[i][1] = new_xy
+            return (i, push_m)
+        return None
+
+    def compute_segment_masks(self, path: np.ndarray) -> None:
+        """Per-segment feasibility, pinch and push masks over the final waypoint set."""
+        n = len(path)
+        num_seg = n - 1
+        seg_passable = np.zeros(num_seg, dtype=bool)
+        pinch_mask = np.zeros(num_seg, dtype=bool)
+        push_per_seg = np.zeros(num_seg, dtype=np.float32)
+        for i in range(num_seg):
+            seg_passable[i] = self.prm.segment_passable(path[i], path[i + 1], self.cfg.seg_padding_m)
+            pinch_mask[i] = self.prm.segment_min_clearance(path[i], path[i + 1]) < self.cfg.pinch_clearance_m
+
+        if self.block_event is not None:
+            i, push_m = self.block_event
+            for seg in (i - 1, i):
+                if 0 <= seg < num_seg:
+                    seg_passable[seg] = False
+                    push_per_seg[seg] = push_m
+
+        self.seg_passable = seg_passable
+        self.pinch_mask = pinch_mask
+        self.push_per_seg = push_per_seg
+
+    def build_dense_path(self, path: np.ndarray) -> None:
+        """Equal-arc-length dense path in height-map coordinates, with `z_offset` already applied."""
+        dense = self.resample_path(np.array(path, dtype=np.float64), self.cfg.num_dense_points)
+        dense[:, 2] += self.cfg.z_offset / self.prm.v_scale
+        self.path_dense = dense
 
     def euclidean(self, p1: np.ndarray, p2: np.ndarray, optimal: bool = True) -> float:
         """Distance heuristic between two points: true Euclidean distance if `optimal`, otherwise a

@@ -44,11 +44,18 @@ def euler_xyz_from_quat_wrapped(quat: torch.Tensor) -> tuple[torch.Tensor, torch
 def time_out_navigation(
     env: "ManagerBasedRLEnv",
     goal_cmd_name: str = "robot_goal",
-    distance_threshold: float = 0.5
+    distance_threshold: float = 0.5,
+    strict_success: bool = False,
 ) -> torch.Tensor:
     """Terminate the episode when the episode length exceeds the maximum episode length.
 
     This also tracks success metrics by checking if the robot reached the goal before timeout.
+
+    Args:
+        strict_success: when True, a timeout only counts as success if the robot is **inside the goal
+            radius on the timeout step**. The default (False) keeps the legacy rule - "entered the
+            radius at any point during the episode" - which credits a robot that ran through the goal
+            and kept going.
     """
     from isaaclab_nav_task.navigation.mdp.navigation.goal_commands import RobotNavigationGoalCommand
 
@@ -64,7 +71,10 @@ def time_out_navigation(
     goal_cmd_generator.time_at_goal[distance_goal < distance_threshold] += 1 * env.step_dt
 
     if env_ids.numel() > 0:  # Check if env_ids is not empty
-        success_masks = goal_cmd_generator.time_at_goal > 0.0
+        if strict_success:
+            success_masks = distance_goal < distance_threshold
+        else:
+            success_masks = goal_cmd_generator.time_at_goal > 0.0
         value_buffer = torch.zeros_like(distance_goal)  # init with 0: Fail
         value_buffer[success_masks] = 1.0  # Success
         goal_cmd_generator.goal_reached_buffer.add(value_buffer, env_ids)
@@ -131,14 +141,22 @@ def at_goal_navigation(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     distance_threshold: float = 0.5,
     goal_cmd_name: str = "robot_goal",
+    reset_on_exit: bool = False,
 ) -> torch.Tensor:
-    """Terminate the episode when the goal is reached.
+    """Terminate the episode when the goal has been reached and held.
+
+    With `reset_on_exit=True` the dwell counter is **consecutive**: it resets to zero the moment the
+    robot leaves the radius, and the episode only ends after `required_steps_at_goal` straight steps
+    inside it (1.5 s). That is the definition of "arrived" this project wants - the legacy latch
+    (`time_at_goal > 0`, never reset) made brushing past the goal at full speed a success 4 s later,
+    which is exactly the behaviour the policy learned to exploit.
 
     Args:
         env: The learning environment.
         asset_cfg: The name of the robot asset.
         distance_threshold: The distance threshold to the goal.
         goal_cmd_name: The name of the goal command term.
+        reset_on_exit: Use consecutive-dwell semantics (see above) instead of the legacy latch.
 
     Returns:
         Boolean tensor indicating whether the goal is reached.
@@ -153,17 +171,23 @@ def at_goal_navigation(
     xy_error = torch.norm(goal_cmd_generator._get_unscaled_command()[:, :2], dim=1)
 
     # Check conditions for termination
-    at_goal = xy_error < distance_threshold
+    in_radius = xy_error < distance_threshold
 
-    # already at goal
-    already_at_goal = goal_cmd_generator.time_at_goal > 0.0
-    at_goal = torch.logical_or(at_goal, already_at_goal)
-
-    # Update the time at goal in steps
-    goal_cmd_generator.time_at_goal_in_steps[at_goal] += 1  # Increment if at goal
-
-    # Determine if termination condition is met
-    termination = goal_cmd_generator.time_at_goal_in_steps > goal_cmd_generator.required_time_at_goal_in_steps
+    if reset_on_exit:
+        # ManagerBasedRLEnv.step() computes terminations *before* rewards, so both the counter and the
+        # one-step pulse updated here are what `goal_reached_bonus` sees on this very step.
+        steps = torch.where(
+            in_radius, goal_cmd_generator.steps_at_goal + 1.0, torch.zeros_like(goal_cmd_generator.steps_at_goal)
+        )
+        goal_cmd_generator.steps_at_goal = steps
+        goal_cmd_generator.goal_dwell_completed = steps == float(goal_cmd_generator.required_steps_at_goal)
+        termination = steps >= float(goal_cmd_generator.required_steps_at_goal)
+    else:
+        # Legacy latched behaviour (kept for the Go2W task).
+        already_at_goal = goal_cmd_generator.time_at_goal > 0.0
+        at_goal = torch.logical_or(in_radius, already_at_goal)
+        goal_cmd_generator.time_at_goal_in_steps[at_goal] += 1  # Increment if at goal
+        termination = goal_cmd_generator.time_at_goal_in_steps > goal_cmd_generator.required_time_at_goal_in_steps
 
     # Update goal reached buffer if termination condition is met
     env_ids = torch.where(termination)[0]

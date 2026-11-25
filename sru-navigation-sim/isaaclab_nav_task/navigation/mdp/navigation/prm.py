@@ -155,6 +155,8 @@ class Prm:
         self.v_scale = terrain_gen_cfg.vertical_scale
         self.size = terrain_gen_cfg.size
 
+        self.compute_clearance_map()
+
         self.build_prm()
         if self.cfg.visualise:
             self.visualise()
@@ -200,6 +202,52 @@ class Prm:
         mask_float = cliff_mask.to(torch.float32).unsqueeze(0).unsqueeze(0)
         dilated = torch.nn.functional.max_pool2d(mask_float, kernel_size=k, stride=1, padding=self.cfg.padding)
         self.padding_mask = dilated.squeeze(0).squeeze(0).to(torch.bool)
+
+    def compute_clearance_map(self):
+        """Distance (in metres) from every cell to the nearest non-free cell.
+
+        This is the per-tile "how much room is left" map used by the path pipeline: noise amplitude,
+        the local blocking-event push, the pinch mask and the metric `segment_passable` test are all
+        expressed in this quantity. Cell centres inside a free corridor therefore report roughly the
+        corridor's **half**-width.
+        """
+        from scipy.ndimage import distance_transform_edt
+
+        free = self._free_np if hasattr(self, "_free_np") else self.free_mask.detach().cpu().numpy()
+        self._clearance_np = (distance_transform_edt(free) * self.h_scale).astype(np.float32)
+
+    @property
+    def clearance_map(self) -> np.ndarray:
+        """`(X, Y)` array of distance-to-obstacle in metres (see `compute_clearance_map`)."""
+        return self._clearance_np
+
+    def clearance_at(self, point) -> float:
+        """Clearance (metres) at a single height-map point, with index clamping."""
+        x = int(np.clip(round(point[0]), 0, self._clearance_np.shape[0] - 1))
+        y = int(np.clip(round(point[1]), 0, self._clearance_np.shape[1] - 1))
+        return float(self._clearance_np[x, y])
+
+    def segment_min_clearance(self, p1: np.ndarray, p2: np.ndarray) -> float:
+        """Minimum clearance (metres) over the cells a straight segment passes through."""
+        rr, cc = line(int(p1[1]), int(p1[0]), int(p2[1]), int(p2[0]))
+        return float(self._clearance_np[cc, rr].min())
+
+    def segment_passable(self, p1: np.ndarray, p2: np.ndarray, clearance_m: float) -> bool:
+        """Whether a straight segment is physically passable for a body of radius `clearance_m`.
+
+        Unlike `is_traversable`, this asks a *metric* question ("does the robot fit?") rather than a
+        cell-dilation one, so it can be asked with a body radius that differs from `cfg.padding` -
+        the PRM's 4-cell dilation (0.4 m) is much wider than the measured B2W half-width and would
+        misjudge genuine 0.8 m doorways as impassable.
+
+        Height discontinuities are checked exactly as in `is_traversable` (same `max_height_diff`
+        threshold), so stairs remain passable.
+        """
+        rr, cc = line(int(p1[1]), int(p1[0]), int(p2[1]), int(p2[0]))
+        heights = self._height_np[cc, rr]
+        if not np.all(np.abs(np.diff(heights)) <= self.cfg.max_height_diff):
+            return False
+        return float(self._clearance_np[cc, rr].min()) >= clearance_m
 
     def sample_free_point(self) -> tuple[int, int, int]:
         """Randomly sample a non-padded point from the height map, returning (x, y, height)."""
