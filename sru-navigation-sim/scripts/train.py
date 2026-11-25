@@ -18,10 +18,22 @@ Arguments:
     --video              Enable video recording
     --video_length       Video length in steps (default: 200)
     --video_interval     Recording interval in steps (default: 2000)
+    --resume             Resume from a checkpoint instead of starting from scratch
+    --load_run           (resume) regex of the run dir under logs/rsl_rl/<experiment_name>/
+    --load_checkpoint    (resume) regex of the checkpoint file, e.g. 'model_750\.pt'
+    --resume_same_log_dir
+                         (resume) log into the loaded run dir so TensorBoard keeps one curve
 
 Examples:
     python scripts/train.py --task Isaac-Navigation-B2W-v0 --num_envs 2048
     python scripts/train.py --task Isaac-Navigation-B2W-v0 --video --seed 42
+    python scripts/train.py --task Isaac-Nav-MDPO-Go2W-v0 --resume \
+        --load_run '.*go2w_mdpo_sigma_bounded' --load_checkpoint 'model_750\.pt' \
+        --max_iterations 15000 --resume_same_log_dir
+
+Note on resuming: ``--max_iterations`` is the *absolute* target for the whole run (e.g. still
+15000 when resuming from model_750.pt); the remaining iterations are computed from the
+checkpoint's iteration. That keeps the LR / entropy / clip schedules on their original curve.
 
 Logs saved to: logs/rsl_rl/<experiment_name>/<timestamp>/
 """
@@ -44,6 +56,17 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--run_name", type=str, default=None, help="Name of the wandb run (appended to log directory).")
+parser.add_argument("--resume", action="store_true", default=False, help="Resume training from a checkpoint.")
+parser.add_argument("--load_run", type=str, default=None, help="(resume) Regex of the run directory to load.")
+parser.add_argument(
+    "--load_checkpoint", type=str, default=None, help="(resume) Regex of the checkpoint file to load."
+)
+parser.add_argument(
+    "--resume_same_log_dir",
+    action="store_true",
+    default=False,
+    help="(resume) Write into the loaded run's directory so TensorBoard continues one curve.",
+)
 
 # Append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -98,6 +121,12 @@ def main():
         agent_cfg.max_iterations = args_cli.max_iterations
     if args_cli.run_name is not None:
         agent_cfg.run_name = args_cli.run_name
+    if args_cli.resume:
+        agent_cfg.resume = True
+    if args_cli.load_run is not None:
+        agent_cfg.load_run = args_cli.load_run
+    if args_cli.load_checkpoint is not None:
+        agent_cfg.load_checkpoint = args_cli.load_checkpoint
 
     # Create the environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
@@ -108,11 +137,20 @@ def main():
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
+    # Resolve the checkpoint *before* the runner is created: with `--resume_same_log_dir` the
+    # runner has to be constructed already pointing at the original run directory.
+    resume_path = None
+    if agent_cfg.resume:
+        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        print(f"[INFO] Resuming from checkpoint: {resume_path}")
     # Specify run directory based on timestamp
     log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
+    if resume_path is not None and args_cli.resume_same_log_dir:
+        log_dir = os.path.dirname(resume_path)
+        print(f"[INFO] Resuming into the existing run directory: {log_dir}")
 
     # Create runner
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
@@ -132,7 +170,20 @@ def main():
     dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # Run training
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    num_learning_iterations = agent_cfg.max_iterations
+    if resume_path is not None:
+        runner.load(resume_path)
+        # `learn()` runs `num_learning_iterations` *additional* iterations on top of the loaded
+        # iteration, and the LR / entropy / clip schedules are evaluated against
+        # `current + additional`. Treating `--max_iterations` as the absolute target of the whole
+        # run keeps a resumed schedule on the original curve; passing it as "extra iterations"
+        # silently trains past the target (15000 + 750 in the obvious mistake).
+        num_learning_iterations = max(0, agent_cfg.max_iterations - runner.current_learning_iteration)
+        print(
+            f"[INFO] Resumed at iteration {runner.current_learning_iteration}: "
+            f"running {num_learning_iterations} more iteration(s), target {agent_cfg.max_iterations}."
+        )
+    runner.learn(num_learning_iterations=num_learning_iterations, init_at_random_ep_len=True)
 
     # Close the environment
     env.close()
