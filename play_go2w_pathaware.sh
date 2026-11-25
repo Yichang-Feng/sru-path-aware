@@ -4,24 +4,37 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ISAACLAB_DIR="$SCRIPT_DIR/IsaacLab"
-# Python environment. Resolution order:
-#   1. $CONDA_ENV_DIR if the caller set it
-#   2. the currently activated conda env ($CONDA_PREFIX)
-#   3. the path on the machine this workspace was developed on
-# Hardcoding only (3) breaks every other clone (different user, different env name).
-if [[ -z "${CONDA_ENV_DIR:-}" ]]; then
-  if [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
-    CONDA_ENV_DIR="$CONDA_PREFIX"
-  else
-    CONDA_ENV_DIR="/home/yichangfeng/miniforge3/envs/sru-pathaware"
-  fi
+# Python environment. `isaaclab.sh` itself resolves the interpreter as
+#   $CONDA_PREFIX/bin/python -> $VIRTUAL_ENV/bin/python -> IsaacLab/_isaac_sim/python.sh
+# so the one thing we must not do is clobber CONDA_PREFIX with a wrong path while a perfectly good
+# environment is already active - that is what broke on a plain virtualenv, where exporting a stale
+# CONDA_PREFIX shadowed the valid VIRTUAL_ENV.
+#
+# Precedence: $CONDA_ENV_DIR (explicit) > activated venv > activated conda env > the path of
+# the machine this workspace was developed on. A `python` merely present on PATH is NOT used:
+# it is usually a base env without Isaac Sim, which fails much later and less clearly.
+ACTIVE_ENV=""
+if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+  ACTIVE_ENV="$VIRTUAL_ENV"
+elif [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+  ACTIVE_ENV="$CONDA_PREFIX"
 fi
-if [[ ! -x "$CONDA_ENV_DIR/bin/python" ]]; then
-  echo "[ERROR] No Python at '$CONDA_ENV_DIR/bin/python'." >&2
-  echo "        Activate the conda env first (conda activate <env>), or run:" >&2
+
+if [[ -n "${CONDA_ENV_DIR:-}" ]]; then
+  ENV_DIR="$CONDA_ENV_DIR"
+elif [[ -n "$ACTIVE_ENV" ]]; then
+  ENV_DIR="$ACTIVE_ENV"
+else
+  ENV_DIR="/home/yichangfeng/miniforge3/envs/sru-pathaware"
+fi
+
+if [[ ! -x "$ENV_DIR/bin/python" ]]; then
+  echo "[ERROR] No Python at '$ENV_DIR/bin/python'." >&2
+  echo "        Activate your environment first (conda activate / source venv/bin/activate), or run:" >&2
   echo "        CONDA_ENV_DIR=/path/to/env $0 ..." >&2
   exit 1
 fi
+CONDA_ENV_DIR="$ENV_DIR"
 PLAY_SCRIPT="$SCRIPT_DIR/sru-navigation-sim/scripts/play.py"
 
 TASK="${TASK:-Isaac-Nav-PPO-Go2W-PathAware-Play-v0}"
@@ -53,8 +66,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 export TERM=xterm
-export CONDA_PREFIX="$CONDA_ENV_DIR"
-export PATH="$CONDA_ENV_DIR/bin:$PATH"
+export PATH="$ENV_DIR/bin:$PATH"
+# Point CONDA_PREFIX at the chosen interpreter only when it is not already a working one;
+# a venv keeps its VIRTUAL_ENV and must not be shadowed.
+if [[ -z "$ACTIVE_ENV" || "$ENV_DIR" != "$ACTIVE_ENV" ]]; then
+  export CONDA_PREFIX="$ENV_DIR"
+fi
 # The conda env has `rsl_rl` installed editable from another checkout
 # (~/sru-path-aware-official). Put this workspace's copy first on the path so edits made here
 # are the ones that actually run (see the same note in train_b2w_pathaware.sh).
