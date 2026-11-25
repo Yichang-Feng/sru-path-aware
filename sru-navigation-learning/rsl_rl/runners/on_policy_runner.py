@@ -244,6 +244,11 @@ class OnPolicyRunner:
             learn_time = stop - start
             self.current_learning_iteration = it
 
+            # Explained variance of the (pre-update) value function, averaged over both storages.
+            # It is the single cheapest signal that separates "the critic cannot keep up" from
+            # "the policy is not improving", which otherwise look identical in the reward curve.
+            explained_variance = self._compute_explained_variance()
+
             # reset dropout masks
             self.alg.reset_dropout_masks()
 
@@ -264,6 +269,33 @@ class OnPolicyRunner:
                         self.writer.save_file(path)
 
         self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration}.pt"))
+
+    def _compute_explained_variance(self) -> float | None:
+        """`1 - Var(returns - values) / Var(returns)`, averaged over the storages of this iteration.
+
+        Uses the pre-update `values`/`returns` still held by the rollout storages, so it says how well
+        the critic *being trained* explained the returns it was trained on. Returns None when the
+        storages do not carry both tensors (non-recurrent variants may not).
+        """
+        variances = []
+        storages = [self.alg.storage_1, self.alg.storage_2] if self.is_mdpo else [self.alg.storage]
+        for storage in storages:
+            values = getattr(storage, "values", None)
+            returns = getattr(storage, "returns", None)
+            if values is None or returns is None:
+                continue
+            values = values.flatten().float()
+            returns = returns.flatten().float()
+            if values.numel() < 2:
+                continue
+            var_returns = torch.var(returns, unbiased=False)
+            if var_returns < 1e-8:
+                continue
+            var_residual = torch.var(returns - values, unbiased=False)
+            variances.append((1.0 - var_residual / var_returns).item())
+        if not variances:
+            return None
+        return float(sum(variances) / len(variances))
 
     def log(self, locs: dict, width: int = 80, pad: int = 35):
         """Log training statistics."""
@@ -310,7 +342,18 @@ class OnPolicyRunner:
             self.writer.add_scalar("Loss/entropy_coef", self.alg.entropy_coef, locs["it"])
         if hasattr(self.alg, "clip_param"):
             self.writer.add_scalar("Loss/clip_param", self.alg.clip_param, locs["it"])
+        if locs.get("explained_variance") is not None:
+            self.writer.add_scalar("Loss/explained_variance", locs["explained_variance"], locs["it"])
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
+        # Raw `log_std` (before the clamp) next to the clamped std, and the clamp ceiling itself.
+        # `mean_noise_std` alone cannot show that the parameter is sitting on the wall - which it did
+        # for ~5000 iterations on the 2026-11-24 B2W run.
+        actor_critic_for_std = self.alg.actor_critic_1 if self.is_mdpo else self.alg.actor_critic
+        if getattr(actor_critic_for_std, "log_std", None) is not None:
+            self.writer.add_scalar("Policy/raw_log_std_mean", actor_critic_for_std.log_std.mean().item(), locs["it"])
+            log_std_max = getattr(actor_critic_for_std, "log_std_max", None)
+            if log_std_max is not None:
+                self.writer.add_scalar("Policy/log_std_max", float(log_std_max), locs["it"])
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar("Perf/collection time", locs["collection_time"], locs["it"])
         self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
@@ -402,11 +445,16 @@ class OnPolicyRunner:
         self.current_learning_iteration = loaded_dict["iter"]
         return loaded_dict["infos"]
 
-    def get_inference_policy(self, device=None):
-        """Get the inference policy function."""
+    def get_inference_policy(self, device=None, policy_index: int = 1):
+        """Get the inference policy function.
+
+        `policy_index` picks which of the two MDPO actors is used (1 or 2). Training logs mix both
+        policies, so a single play episode with the default (1) does not necessarily reflect what the
+        curves describe - compare 1 vs 2 when a behaviour looks inconsistent with the metrics.
+        """
         self.eval_mode()
         if self.is_mdpo:
-            actor_critic = self.alg.actor_critic_1
+            actor_critic = self.alg.actor_critic_2 if policy_index == 2 else self.alg.actor_critic_1
         else:
             actor_critic = self.alg.actor_critic
 

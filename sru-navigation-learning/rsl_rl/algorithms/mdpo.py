@@ -111,6 +111,13 @@ class MDPO:
         entropy_schedule: str = "fixed",
         min_clip_param: float = 0.0,
         clip_schedule: str = "fixed",
+        log_std_schedule: str = "fixed",
+        log_std_anneal_start: int = 1000,
+        log_std_anneal_mid: int = 5000,
+        log_std_anneal_end: int = 8000,
+        log_std_max_initial: float = 0.1,
+        log_std_max_mid: float = -0.6,
+        log_std_max_final: float = -1.0,
         device: str = "cpu",
         use_muon: bool = True,
         **kwargs,
@@ -173,6 +180,19 @@ class MDPO:
         self.initial_clip_param = clip_param
         self.min_clip_param = min_clip_param
         self.clip_schedule = clip_schedule
+
+        # Moving wall for the action-noise clamp. A one-off reduction cannot work: `torch.clamp`
+        # gives zero gradient outside the bounds, so a `log_std` pinned on the ceiling stays there
+        # forever (measured: raw log_std = 0.201..0.205 for 5000 iterations on the B2W run of
+        # 2026-11-24). The wall itself therefore moves.
+        self.log_std_schedule = log_std_schedule
+        self.log_std_anneal_start = int(log_std_anneal_start)
+        self.log_std_anneal_mid = int(log_std_anneal_mid)
+        self.log_std_anneal_end = int(log_std_anneal_end)
+        self.log_std_max_initial = float(log_std_max_initial)
+        self.log_std_max_mid = float(log_std_max_mid)
+        self.log_std_max_final = float(log_std_max_final)
+        self.current_log_std_max = float(getattr(actor_critic_1, "log_std_max", log_std_max_initial))
 
     def _create_optimizer(
         self, actor_critic: "ActorCritic", learning_rate: float, use_muon: bool
@@ -441,6 +461,35 @@ class MDPO:
             self.clip_param = end + (start - end) * math.exp(-3.0 * progress)
         self.value_clip_param = self.clip_param
 
+    def _update_log_std_bounds(self, iteration: int):
+        """Move the `log_std` clamp ceiling along a piecewise-cosine schedule.
+
+        `log_std_max_initial` up to `log_std_anneal_start`, then a cosine ramp down to
+        `log_std_max_mid` at `log_std_anneal_mid`, and on to `log_std_max_final` at
+        `log_std_anneal_end`. Because the parameter is clamped rather than projected, lowering the
+        ceiling forces the optimiser to keep pulling `log_std` down instead of parking it on a wall.
+        """
+        if self.log_std_schedule == "fixed":
+            return
+
+        start, mid, end = self.log_std_anneal_start, self.log_std_anneal_mid, self.log_std_anneal_end
+        v0, v1, v2 = self.log_std_max_initial, self.log_std_max_mid, self.log_std_max_final
+        if iteration <= start:
+            value = v0
+        elif iteration <= mid:
+            p = (iteration - start) / max(mid - start, 1)
+            value = v0 + (v1 - v0) * 0.5 * (1.0 - math.cos(math.pi * p))
+        elif iteration <= end:
+            p = (iteration - mid) / max(end - mid, 1)
+            value = v1 + (v2 - v1) * 0.5 * (1.0 - math.cos(math.pi * p))
+        else:
+            value = v2
+
+        self.current_log_std_max = value
+        for actor_critic in (self.actor_critic_1, self.actor_critic_2):
+            if hasattr(actor_critic, "log_std_max"):
+                actor_critic.log_std_max = value
+
     def _compute_ppo_loss(
         self,
         actions_log_prob: torch.Tensor,
@@ -494,6 +543,7 @@ class MDPO:
         # Update the exploration bonus and the trust region where the config asks for it
         self._update_entropy_coef(iteration, max_iterations)
         self._update_clip_param(iteration, max_iterations)
+        self._update_log_std_bounds(iteration)
 
         # Get mini-batch generators
         if self.actor_critic_1.is_recurrent:
