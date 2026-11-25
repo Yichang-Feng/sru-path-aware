@@ -234,6 +234,7 @@ cd IsaacLab && PYTHONPATH=/home/yichangfeng/sru-path-aware/sru-navigation-learni
 | `Metrics/robot_goal/invalid_seg_frac` | 5–10%，稳定 | 上升 → 路径质量退化（膨胀不改变它） |
 | `Metrics/robot_goal/relax_frac` | 12–20%，稳定 | 只监控，**不要**和上一条混看 |
 | `Metrics/robot_goal/blocked_episode` | ≈0.15→0.30 | 与挡路事件概率的 ramp 对齐 |
+| `Metrics/robot_goal/a_star_failed_frac` | 应接近 0 | 高 → 该 tile 的 PRM 上 start/goal 连不通，该回会的路径是直线穿墙、学不到东西 |
 | `Metrics/robot_goal/distance_to_path` | 1500 iter 起下降，4000 iter < 0.8 m | 不降 → 查路径项所得占比 |
 | `Policy/raw_log_std_mean` vs `Policy/log_std_max` | 跟随墙面分段下降，且**低于**墙面 | 贴着墙面不动 → 调度未生效 |
 | `Loss/explained_variance` | > 0.5 | 长期 < 0.2 → critic 跟不上（Phase 2 再处理） |

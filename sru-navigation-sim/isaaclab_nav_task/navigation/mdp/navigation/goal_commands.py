@@ -770,6 +770,10 @@ class RobotNavigationGoalCommand(CommandTerm):
             self.metrics["relax_frac"] = pm.relax_mask.float().mean(dim=1)
             self.metrics["pinch_frac"] = pm.pinch_mask.float().mean(dim=1)
             self.metrics["blocked_episode"] = pm.push_per_seg.gt(0.0).any(dim=1).float()
+            # Share of episodes whose path is a straight spawn->goal fallback because A* could not
+            # connect start to goal on that tile's roadmap. Such a path runs through walls, so the
+            # episode teaches nothing about following a route - keep this near zero.
+            self.metrics["a_star_failed_frac"] = pm.a_star_failed.float()
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         """Reset command generator and compute episode metrics."""

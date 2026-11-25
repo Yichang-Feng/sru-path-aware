@@ -176,6 +176,10 @@ class MultiPath:
         self.s_reward: torch.Tensor = torch.zeros((num_envs,), dtype=torch.float32, device=self.device)
         self._last_inv_pos: Optional[torch.Tensor] = None
         self._last_inv_rot: Optional[torch.Tensor] = None
+        # Whether the last rebuild's A* search failed (the path is then a straight spawn->goal
+        # fallback, i.e. useless as a guide). Surfaced as a metric so the rate is visible instead of
+        # being buried in a console warning storm.
+        self.a_star_failed: torch.Tensor = torch.zeros((num_envs,), dtype=torch.bool, device=self.device)
         self._last_metrics: Optional[tuple[torch.Tensor, torch.Tensor]] = None
         self._last_idx_glob: Optional[torch.Tensor] = None
         self._last_advance: Optional[torch.Tensor] = None
@@ -245,6 +249,7 @@ class MultiPath:
         self.last_best_progress[env_id] = 0.0
         self.s_track[env_id] = 0.0
         self.s_reward[env_id] = 0.0
+        self.a_star_failed[env_id] = bool(path.a_star_failed)
 
         self.seg_passable[env_id] = torch.as_tensor(path.seg_passable, device=self.device, dtype=torch.bool)
         self.pinch_mask[env_id] = torch.as_tensor(path.pinch_mask, device=self.device, dtype=torch.bool)
@@ -836,6 +841,11 @@ class GlobalPath:
         h_scale = self.prm.h_scale
         noisy = np.array(path, dtype=np.float64, copy=True)
         for i in range(1, len(path) - 1):
+            # A waypoint that is already outside the tile (a failed A* falls back to a straight
+            # spawn-goal segment, which can leave the map) must not be perturbed: `segment_passable`
+            # rejects out-of-map points, so every candidate would be refused anyway.
+            if not self.prm.in_bounds(path[i]):
+                continue
             # Never perturb a waypoint that belongs to a pinch (narrow doorway / corridor) segment.
             # Rejection sampling alone is not enough: it validates the *sparse* segments, but after
             # resampling a nudged endpoint can still clip the corner of a 0.8 m doorway.
@@ -922,6 +932,10 @@ class GlobalPath:
 
             push_m = clearance_m + 0.30
             new_xy = p[:2] + perp * (push_m / h_scale)
+            # `clearance_at` clamps to the map, so an out-of-map point could otherwise be accepted
+            # as "inside an obstacle" and poison the path with a waypoint outside the tile.
+            if not self.prm.in_bounds(new_xy):
+                continue
             if self.prm.clearance_at([new_xy[0], new_xy[1], p[2]]) != 0.0:
                 continue
 

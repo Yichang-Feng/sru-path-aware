@@ -227,9 +227,26 @@ class Prm:
         y = int(np.clip(round(point[1]), 0, self._clearance_np.shape[1] - 1))
         return float(self._clearance_np[x, y])
 
+    def in_bounds(self, point) -> bool:
+        """Whether a height-map point (x, y) falls inside the map.
+
+        The clearance map does not taper at the tile border, so a waypoint near the edge can be
+        pushed outside by noise or by a blocking event. Callers must check this before using such a
+        point: `line()` happily produces out-of-range cells and the height/clearance arrays are
+        indexed without wrapping.
+        """
+        rows, cols = self._height_np.shape
+        return 0.0 <= point[0] <= rows - 1 and 0.0 <= point[1] <= cols - 1
+
+    def _segment_cells(self, p1: np.ndarray, p2: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Cells along the line between two height-map points, clipped to the map."""
+        rr, cc = line(int(p1[1]), int(p1[0]), int(p2[1]), int(p2[0]))
+        rows, cols = self._height_np.shape
+        return np.clip(cc, 0, rows - 1), np.clip(rr, 0, cols - 1)
+
     def segment_min_clearance(self, p1: np.ndarray, p2: np.ndarray) -> float:
         """Minimum clearance (metres) over the cells a straight segment passes through."""
-        rr, cc = line(int(p1[1]), int(p1[0]), int(p2[1]), int(p2[0]))
+        cc, rr = self._segment_cells(p1, p2)
         return float(self._clearance_np[cc, rr].min())
 
     def segment_passable(self, p1: np.ndarray, p2: np.ndarray, clearance_m: float) -> bool:
@@ -241,9 +258,12 @@ class Prm:
         misjudge genuine 0.8 m doorways as impassable.
 
         Height discontinuities are checked exactly as in `is_traversable` (same `max_height_diff`
-        threshold), so stairs remain passable.
+        threshold), so stairs remain passable. Points outside the map are rejected outright rather
+        than clipped: a segment that leaves the tile is not something the robot can drive.
         """
-        rr, cc = line(int(p1[1]), int(p1[0]), int(p2[1]), int(p2[0]))
+        if not (self.in_bounds(p1) and self.in_bounds(p2)):
+            return False
+        cc, rr = self._segment_cells(p1, p2)
         heights = self._height_np[cc, rr]
         if not np.all(np.abs(np.diff(heights)) <= self.cfg.max_height_diff):
             return False

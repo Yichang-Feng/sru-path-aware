@@ -187,6 +187,36 @@ def test_noise_keeps_endpoints_and_avoids_narrow_gaps():
         assert prm.segment_passable(noisy[i], noisy[i + 1], 0.31)
 
 
+def test_out_of_map_points_are_rejected_not_crashing():
+    """A point outside the tile must be refused, not raise IndexError.
+
+    The clearance map does not taper at the tile border, so noise (or the straight spawn->goal
+    fallback used when A* fails) can produce coordinates outside the height map. `line()` then yields
+    cells past the array bounds - this crashed a 1046-environment Go2W run.
+    """
+    prm = make_prm(make_height_map())  # 200 x 200 cells
+    p_in = np.array([10.0, 10.0, 0.0])
+    p_out = np.array([10.0, 240.0, 0.0])
+
+    assert not prm.in_bounds(p_out)
+    assert prm.segment_passable(p_in, p_out, 0.31) is False
+    assert prm.segment_min_clearance(p_in, p_out) >= 0.0  # clipped, does not raise
+
+
+def test_noise_never_leaves_the_map():
+    """Waypoints hugging the tile border keep their coordinates inside the map."""
+    prm = make_prm(make_height_map())
+    gp = GlobalPath(v2_cfg(), env_id=0, prm=prm)
+    xs = np.linspace(20, 180, 15)
+    path = np.stack([xs, np.full_like(xs, 3.0), np.zeros_like(xs)], axis=1)  # 0.3 m from the edge
+
+    noisy = gp.add_shaped_noise_to_path(path)
+
+    rows, cols = prm._height_np.shape
+    assert np.all((noisy[:, 0] >= 0) & (noisy[:, 0] <= rows - 1))
+    assert np.all((noisy[:, 1] >= 0) & (noisy[:, 1] <= cols - 1))
+
+
 def test_relax_mask_is_not_wrapped():
     """B9.5 - an invalid *last* segment must not relax segment 0 (that would be `torch.roll`)."""
     mp = MultiPath.__new__(MultiPath)
