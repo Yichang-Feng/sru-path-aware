@@ -45,6 +45,14 @@ done
 
 ## 训练与回放
 
+先激活环境（或显式指定）：四个 launcher 按 **`$CONDA_ENV_DIR` > 当前激活的 conda env (`$CONDA_PREFIX`) >
+作者机器上的默认路径** 解析 Python，所以换机器/换用户名只需要 `conda activate <env>`，不用改脚本。
+
+```bash
+conda activate <你的环境名>          # 例如 env_sru_path
+# 或：CONDA_ENV_DIR=/path/to/env ./train_go2w_pathaware.sh ...
+```
+
 B2W：
 
 ```bash

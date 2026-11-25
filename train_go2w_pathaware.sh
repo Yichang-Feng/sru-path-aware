@@ -4,7 +4,24 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ISAACLAB_DIR="$SCRIPT_DIR/IsaacLab"
-CONDA_ENV_DIR="/home/yichangfeng/miniforge3/envs/sru-pathaware"
+# Python environment. Resolution order:
+#   1. $CONDA_ENV_DIR if the caller set it
+#   2. the currently activated conda env ($CONDA_PREFIX)
+#   3. the path on the machine this workspace was developed on
+# Hardcoding only (3) breaks every other clone (different user, different env name).
+if [[ -z "${CONDA_ENV_DIR:-}" ]]; then
+  if [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+    CONDA_ENV_DIR="$CONDA_PREFIX"
+  else
+    CONDA_ENV_DIR="/home/yichangfeng/miniforge3/envs/sru-pathaware"
+  fi
+fi
+if [[ ! -x "$CONDA_ENV_DIR/bin/python" ]]; then
+  echo "[ERROR] No Python at '$CONDA_ENV_DIR/bin/python'." >&2
+  echo "        Activate the conda env first (conda activate <env>), or run:" >&2
+  echo "        CONDA_ENV_DIR=/path/to/env $0 ..." >&2
+  exit 1
+fi
 TRAIN_SCRIPT="$SCRIPT_DIR/sru-navigation-sim/scripts/train.py"
 
 TASK="${TASK:-Isaac-Nav-PPO-Go2W-PathAware-v0}"
