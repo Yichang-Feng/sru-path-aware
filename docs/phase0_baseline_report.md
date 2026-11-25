@@ -69,14 +69,18 @@ v2 层抽到了 `navigation/config/path_aware.py::apply_path_aware_v2`，**B2W �
 | `...-Go2W-PathAware-NoCurriculum-*`、Phase1–5、LowObs、Heading、PureMaze | **不变**（仍是 60 s / legacy 管线 / 各自奖励），可复现旧结果 |
 | `Go2WPathAwareRewardsCfg` | 直接继承 `B2WRewardsCfg`（奖励项与机器人无关），`Go2WNavigationEnvCfg.__post_init__` 会无条件覆盖 `self.rewards`，所以 v2 子类在其 `super()` 之后重新赋值 |
 | 地形覆盖 | Phase4 的 `curriculum=True` + `max_init_terrain_level=0`，而 `CurriculumCfg` 里**没有** `update_terrain_levels`，等于全程只训难度第 0 行。v2 子类关掉课程并把 `max_init_terrain_level` 设成 10（全 6 行），和 B2W 一致 |
+| `joint_acc_l2_joint` | 该项来自共享基底 `RewardsCfg`，正则写的是 AoW-D 的 `.*HAA/.*HFE/.*KFE/.*WHEEL`；换成 path-aware 奖励集后必须在 `__post_init__` 里重指到 `.*hip_joint/.*thigh_joint/.*calf_joint/.*foot_joint`，否则 manager 构建时直接 `Not all regular expressions are matched`（Go2W 冒烟抓到） |
 | `Go2WNav{MDPO,PPO}RunnerPathAwareV2Cfg` | 直接继承 B2W 的 runner，`seed=42`、`max_iterations=4000`，其余（`path_length=120`、LR/熵退火、`log_std` 移动墙）与 B2W 完全一致 |
 
 Go2W 的观测维度与 B2W 相同（2697 / 5834）：深度项无论 D435 还是 ZED 都是 64×40=2560，height scan 同一网格。
 
-验证：`test_b2w_and_go2w_get_identical_v2_layers` / `test_go2w_v2_runners_match_the_b2w_schedule`
-逐字段比对两边的路径配置、终止参数、观测顺序、奖励权重与调度字段。
-⚠️ **Go2W 的场景级冒烟尚未跑**：本机此时正跑着 B2W 的 4000 iter 全量训练（约占 13.6 GB），
-再起一个 Go2W env（180 tiles）会 OOM。命令已备好，等 GPU 释放后执行：
+验证：
+
+- `test_b2w_and_go2w_get_identical_v2_layers` / `test_go2w_v2_runners_match_the_b2w_schedule`
+  逐字段比对两边的路径配置、终止参数、观测顺序、奖励权重、地形覆盖、关节正则与调度字段（19 项单测全绿）。
+- 场景级冒烟（`Isaac-Nav-MDPO-Go2W-PathAware-Dev-v0`，32 envs，3 iter）：**exit 0、无 traceback**，
+  policy 2697 / critic 5834、14 项奖励权重与 B2W 一致、`agent.yaml` 里 `path_length: 120` 与
+  `log_std_schedule: cosine` 等全部生效。第一次跑时正是它抓到了 `joint_acc_l2_joint` 的关节正则问题。
 
 ```bash
 ./train_go2w_pathaware.sh --task Isaac-Nav-MDPO-Go2W-PathAware-Dev-v0 \

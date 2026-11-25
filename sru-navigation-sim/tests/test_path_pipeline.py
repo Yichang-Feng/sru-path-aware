@@ -569,6 +569,13 @@ def test_b2w_and_go2w_get_identical_v2_layers():
         assert weights["path_deviation_penalty"] == pytest.approx(-0.15)
         assert weights["time_out_penalty"] == pytest.approx(-50.0)
 
+        # `joint_acc_l2_joint` is inherited from the shared base `RewardsCfg`, whose regexes are the
+        # AoW-D ones; every task that adopts the path-aware reward set must re-point them, otherwise
+        # env construction dies with "Not all regular expressions are matched".
+        joint_names = cfg.rewards.joint_acc_l2_joint.params["asset_cfg"].joint_names
+        assert ".*HAA" not in joint_names and ".*WHEEL" not in joint_names
+        assert ".*hip_joint" in joint_names and ".*foot_joint" in joint_names
+
     # Playback keeps the 60 s protocol on both robots.
     from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import B2WNavigationEnvCfg_PLAY
 

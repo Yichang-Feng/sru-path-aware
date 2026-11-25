@@ -433,6 +433,13 @@ class Go2WNavigationEnvCfg_PathAwareV2(Go2WNavigationEnvCfg_Phase4):
         # `Go2WNavigationEnvCfg.__post_init__` assigns `self.rewards = Go2WRewardsCfg()` unconditionally,
         # so the field default above is overwritten and the path-aware set has to be re-applied here.
         self.rewards = Go2WPathAwareRewardsCfg()
+        # `joint_acc_l2_joint` comes from the base `RewardsCfg`, whose joint regexes are the AoW-D
+        # ones (`.*HAA` / `.*HFE` / `.*KFE` / `.*WHEEL`). B2W re-points them in its own
+        # `__post_init__`; a Go2W task that inherits the *reward set* without that line fails at
+        # manager construction with "Not all regular expressions are matched".
+        self.rewards.joint_acc_l2_joint.params = {
+            "asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINT_NAMES + WHEEL_JOINT_NAMES)
+        }
 
         # B2W parity on terrain coverage. Phase 4 keeps `curriculum=True` with
         # `max_init_terrain_level=GO2W_INIT_LEVEL` (default 0), and the curriculum manager has no
