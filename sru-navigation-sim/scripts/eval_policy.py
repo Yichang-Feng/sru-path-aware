@@ -45,6 +45,16 @@ parser.add_argument(
 parser.add_argument(
     "--debug_vis", dest="no_debug_vis", action="store_false", help="Keep command debug markers enabled."
 )
+parser.add_argument(
+    "--legacy_env",
+    action="store_true",
+    default=False,
+    help=(
+        "Restore the pre-redesign environment (60-dim global path only, legacy path pipeline, "
+        "[0,0,0.5,0.5] category mix) so a checkpoint trained before the redesign can be evaluated. "
+        "The termination rule is NOT reverted - measuring it under the current rule is the point."
+    ),
+)
 parser.add_argument("--dump_json", type=str, default=None, help="Per-episode records (JSON) path.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
@@ -158,13 +168,21 @@ class EpisodeTracker:
             self._start_dist[ids] = torch.norm(
                 cmd.goal_position_world[ids, :2] - self.unwrapped.scene["robot"].data.root_pos_w[ids, :2], dim=1
             )
-            self._path_len[ids] = torch.norm(cmd.goal_position_world[ids, :2] - cmd.spawn_position_world[ids, :2], dim=1)
+            # Planned path length (sum of the resampled waypoint segments). Reported next to the
+            # straight-line distance to show how much the planned route detours; the SPL denominator
+            # is the distance actually travelled (see `_prev_traveled`).
+            paths_w = cmd.paths_manager.paths_w
+            self._path_len[ids] = torch.norm(paths_w[ids, 1:] - paths_w[ids, :-1], dim=-1).sum(dim=1)
             for env_id in ids.tolist():
                 tile = tile_ids[env_id]
                 self._tile[env_id] = self.tile_labels[tile] if 0 <= tile < len(self.tile_labels) else "all"
             self._prev_steps_at_goal[ids] = 0.0
 
         self._prev_steps_at_goal = cmd.steps_at_goal.clone()
+        # Distance actually driven during the episode - the SPL denominator. Captured here (and not
+        # read at record time) because the command resets it inside the same `env.step` that ends the
+        # episode.
+        self._prev_traveled = cmd.total_distance_traveled.clone()
         self._prev_len = self.unwrapped.episode_length_buf.clone()
 
     def _record(self, env_id: int, device):
@@ -182,6 +200,7 @@ class EpisodeTracker:
                 "tile": self._tile[env_id],
                 "start_dist": float(self._start_dist[env_id]),
                 "path_len": float(self._path_len[env_id]),
+                "traveled": float(self._prev_traveled[env_id]),
                 "min_dist": float(self._min_dist[env_id]),
                 "d_path_median": float(np.median(samples)) if samples else float("nan"),
                 "d_path_p90": float(np.percentile(samples, 90)) if samples else float("nan"),
@@ -210,7 +229,11 @@ def summarise(records):
         # it stopped or whether the episode ended there. Reported so the old logs' numbers stay
         # interpretable next to the new rule - never use it as the acceptance metric.
         sr_old = sum(1 for r in rows if r["min_dist"] < 0.5) / n
-        spl_num = sum(r["success"] * r["start_dist"] / max(r["path_len"], 1e-6) for r in rows)
+        # SPL, standard definition: success * (shortest-path length / distance actually travelled),
+        # clamped at 1. The straight-line spawn-goal distance is used as the shortest path.
+        spl_num = sum(
+            r["success"] * min(r["start_dist"] / max(r["traveled"], 1e-6), 1.0) for r in rows
+        )
         return {
             "n": n,
             "sr": sr,
@@ -220,6 +243,7 @@ def summarise(records):
             "d_path_p90": statistics.median(r["d_path_p90"] for r in rows),
             "start_dist": statistics.median(r["start_dist"] for r in rows),
             "path_len": statistics.median(r["path_len"] for r in rows),
+            "traveled": statistics.median(r["traveled"] for r in rows),
         }
 
     return {"all": agg(records), **{tile: agg(rows) for tile, rows in by_tile.items()}}
@@ -243,6 +267,18 @@ def main():
             if getattr(term_cfg, "debug_vis", False):
                 term_cfg.debug_vis = False
 
+    if args_cli.legacy_env:
+        # A checkpoint trained before the redesign expects 60 path floats and the old category mix;
+        # feeding it the 120-float layout would simply fail to load. Everything except the
+        # termination rule is rolled back, because the *rule* is what the baseline is re-measured for.
+        for group in (env_cfg.observations.policy, env_cfg.observations.critic):
+            group.__dict__.pop("distance_to_path", None)
+            group.__dict__.pop("target_path_local", None)
+        env_cfg.commands.robot_goal.path_cfg.path_pipeline = "legacy"
+        env_cfg.commands.robot_goal.path_cfg.category_weights = [0.0, 0.0, 0.5, 0.5]
+        agent_cfg.policy.path_length = 60
+        print("[eval] legacy env: 60-dim path obs, legacy pipeline, [0,0,0.5,0.5] categories", flush=True)
+
     env = gym.make(args_cli.task, cfg=env_cfg)
     env = RslRlVecEnvWrapper(env)
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
@@ -252,6 +288,8 @@ def main():
     obs = env.get_observations()
     if isinstance(obs, tuple):
         obs = obs[0]
+    if hasattr(obs, "keys"):
+        obs = obs["policy"]
 
     tracker = EpisodeTracker(env)
     steps = 0
@@ -261,6 +299,8 @@ def main():
         obs, _, _, _ = env.step(actions)
         if isinstance(obs, tuple):
             obs = obs[0]
+        if hasattr(obs, "keys"):
+            obs = obs["policy"]
         tracker.observe()
         steps += 1
 
@@ -278,8 +318,8 @@ def main():
             f"- checkpoint: `{os.path.basename(args_cli.checkpoint)}`",
             f"- horizon: {env_cfg.episode_length_s:.0f} s,  episodes: {len(tracker.records)},  actor: {args_cli.policy_idx}",
             "",
-            "| bucket | n | SR | SR(old rule) | SPL | median d_path | p90 d_path | median start dist | median path len |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| bucket | n | SR | SR(old rule) | SPL | median d_path | p90 d_path | median start dist | median planned len | median travelled |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
         for key in ["all"] + [t for t in TILE_NAMES if t in summary]:
             row = summary[key]
@@ -287,7 +327,8 @@ def main():
                 continue
             lines.append(
                 f"| {key} | {row['n']} | {row['sr']:.3f} | {row['sr_old_rule']:.3f} | {row['spl']:.3f} | "
-                f"{row['d_path_median']:.2f} | {row['d_path_p90']:.2f} | {row['start_dist']:.1f} | {row['path_len']:.1f} |"
+                f"{row['d_path_median']:.2f} | {row['d_path_p90']:.2f} | {row['start_dist']:.1f} | "
+                f"{row['path_len']:.1f} | {row['traveled']:.1f} |"
             )
         os.makedirs(os.path.dirname(args_cli.out) or ".", exist_ok=True)
         with open(args_cli.out, "w") as f:

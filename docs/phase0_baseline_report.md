@@ -101,30 +101,129 @@ cd IsaacLab && ./isaaclab.sh -p -m pytest ../sru-navigation-sim/tests -q
 
 （10 iter 的完整结果见文末。）
 
+**冒烟结果**：`Isaac-Nav-MDPO-B2W-v0`、32 envs、10 iterations、**exit 0、无 traceback**，
+`model_0.pt` / `model_9.pt` 正常落盘，`wandb` 正常记录。观测维度、奖励表、终止项、四条新标量如上表。
+
+### 4.3 Stage F 的落地验证（F4）
+
+`params/agent.yaml` 已含全部新字段：`path_length: 120`、`log_std_schedule: cosine`、
+`log_std_anneal_{start,mid,end}=1000/5000/8000`、`log_std_max_{initial,mid,final}=0.1/-0.6/-1.0`、
+`entropy_schedule: cosine`、`entropy_hold_iters: 500`、`entropy_decay_span: 3500`、
+`min_learning_rate: 0.0001`、`schedule: cosine`。
+
+TensorBoard 标量（前 4 个 iteration）也已按设计写入：
+
+| 标量 | 实测 | 说明 |
+|---|---|---|
+| `Policy/raw_log_std_mean` | −0.008 → −0.006 | clamp **前**的 log_std，低于墙面 0.1 ✓ |
+| `Policy/log_std_max` | 0.1 | 墙面当前值（iter < 1000）✓ |
+| `Policy/mean_noise_std` | 0.99 | clamp 后，与 raw 一致 ✓ |
+| `Loss/explained_variance` | ≈0.00 | 未训练 critic，符合预期 ✓ |
+| `Loss/learning_rate` | 9.8e-4 → 8.1e-4 | cosine（10 iter 下衰减快属正常）✓ |
+| `Loss/entropy_coef` | 0.001 | hold 到 iter 500 ✓ |
+
+> 这两个新标量正是 11-24 那次 run 缺失的关键证据：当时只能从 checkpoint 里反推 `log_std` 钉在墙上。
+
 ---
 
-## 5. 当前状态
+## 5. 基线重评（Stage 0.5）与"不跟路径"的量化
 
-- 代码：Stage A–F 已实现，单元测试全绿。
-- 正在跑：冒烟训练（10 iter）。
-- **待办**：Phase 0.5 基线重评（`scripts/eval_policy.py`，model_6000，60 s / 90 s 各 200 局）；
-  Stage G 的 4000 iter 全量训练需要数天，未启动。
+### 5.1 为什么必须重评
 
-### 基线重评命令
+旧日志的 `Metrics/robot_goal/success_rate` = 0.504 是**碰边锁存**口径、**两个 actor 混合**、且**带观测噪声与外力推动**，
+不能当新管线的对照。重评用 `model_6000`，在**除终止规则外全部回退**的环境里跑（`--legacy_env`：
+legacy 管线、`[0,0,0.5,0.5]` 类别、60 维路径观测），只把终止换成连续驻留；Play 协议（无观测噪声、无 push），
+每档 200 局、20 envs、地形 4×12。
+
+### 5.2 结果
+
+**60 s（与旧训练同 horizon）**
+
+| bucket | n | SR | SR(旧口径) | SPL | median d_path | p90 d_path | 直线距离 | 计划路径长 | 实际行驶 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **all** | 200 | **0.580** | 0.580 | **0.449** | **0.91 m** | 1.99 m | 13.9 m | 24.6 m | **14.4 m** |
+| maze | 57 | 0.737 | 0.737 | 0.577 | 0.76 | 1.95 | 12.2 | 22.4 | 13.9 |
+| non_maze | 27 | 0.815 | 0.815 | 0.595 | 0.87 | 2.24 | 12.3 | 24.8 | 14.6 |
+| **stairs** | 52 | **0.346** | 0.346 | 0.263 | 1.03 | 1.48 | 12.8 | 23.8 | 12.7 |
+| pits | 64 | 0.531 | 0.531 | 0.425 | 1.13 | 2.41 | 14.8 | 25.3 | 15.2 |
+
+**90 s（新 horizon）**
+
+| bucket | n | SR | SR(旧口径) | SPL | median d_path | p90 d_path | 直线距离 | 计划路径长 | 实际行驶 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **all** | 200 | **0.625** | 0.625 | **0.473** | **0.92 m** | 2.06 m | 15.2 m | 23.6 m | **16.2 m** |
+| maze | 46 | 0.543 | 0.543 | 0.402 | 0.99 | 1.86 | 15.5 | 28.6 | 16.2 |
+| non_maze | 34 | 0.853 | 0.853 | 0.658 | 0.94 | 2.33 | 12.8 | 20.6 | 14.6 |
+| stairs | 12 | 0.500 | 0.500 | 0.317 | 0.54 | 1.42 | 10.6 | 16.6 | 13.5 |
+| pits | 108 | 0.602 | 0.602 | 0.462 | 1.01 | 2.17 | 16.1 | 24.6 | 16.8 |
+
+### 5.3 怎么读这两张表
+
+1. **"不跟路径"被量化了**：计划路径中位 **24.6 m**，而策略实际只走了 **14.4 m**——几乎就是直线距离
+   （13.9 m）。也就是说它是一台"朝目标直线冲 + 局部绕障"的机器，规划路径对它的行为几乎没有影响。
+   `median d_path` 0.91 m、`p90` 1.99 m 是同一个结论的另一个视角。
+   这正是旧奖励结构下**理性**的结果：路径项每回合只值 0.70，直连项值 15.7。
+2. **SPL 0.45 的含义**：成功回合里，它走的距离只有"最短路径"的 1.04 倍——很直，但走的是自己那条直线，
+   所以 SPL 高恰恰说明它没在执行规划（规划路径本身平均比直线长 1.8 倍）。
+3. **楼梯是最大瓶颈**：60 s 档 stairs SR **0.346**（n=52，样本足够），non_maze 0.815。和 play 里
+   "楼梯前徘徊、不转身"的现象一致；90 s 档 stairs 只有 12 局（0.50），**不足以**下结论。
+4. **两档不能直接比**：地形是随机分配的，两档的 tile 构成差异很大（stairs 52 vs 12，pits 64 vs 108），
+   bucket 级数字的抽样波动 ≈ ±0.1，只有 `all` 行可以跨档比较（0.580 vs 0.625）。
+5. **旧口径 SR 与新口径完全相同**：这 400 局里没有"进了 0.5 m 圈又走掉"的回合——策略一到就刹停。
+   所以锁存带来的"水分"在这个策略上不是主要问题，**主要问题是它根本没打算走近路以外的路**。
+6. 这个 0.58/0.63 比训练日志的 0.504 高，不是矛盾：重评没有观测噪声、没有 push；而日志里是两个 actor 混合的结果。
+
+> **验收基线取 60 s 档 `all`: SR 0.580 / median d_path 0.91 m / SPL 0.449。**
+> 新管线要跑赢的是这个，不是 0.504。
+
+### 5.4 复现命令
+
+> 旧 checkpoint 的观测是 60 维路径 / 2636 维，新环境是 120 / 2697 - 直接喂会加载失败。
+> `--legacy_env` 把**除终止规则以外**的东西都回退（legacy 管线、`[0,0,0.5,0.5]`、60 维路径），
+> 只保留新的连续驻留判定——这正是本次重评要挤掉的水分。
 
 ```bash
-cd IsaacLab && ./isaaclab.sh -p ../sru-navigation-sim/scripts/eval_policy.py \
+cd IsaacLab && PYTHONPATH=/home/yichangfeng/sru-path-aware/sru-navigation-learning \
+./isaaclab.sh -p ../sru-navigation-sim/scripts/eval_policy.py \
   --task Isaac-Nav-MDPO-B2W-Play-v0 \
   --checkpoint /home/yichangfeng/sru-path-aware/IsaacLab/logs/rsl_rl/b2w_navigation_mdpo/2026-11-24_09-05-54_b2w_sigma_bounded/model_6000.pt \
-  --episodes 200 --episode_length_s 60 --num_envs 20 \
+  --episodes 200 --episode_length_s 60 --num_envs 20 --legacy_env \
   --out ../docs/phase0_baseline_60s.md --headless
 ```
 
-> ⚠️ 旧日志的 `success_rate` 0.504 是"碰边锁存"口径，**不可**作为新基线对照。
+> `SR(old rule)`（曾进入 0.5 m）与 `SR`（连续驻留）并列给出，两者的差值就是"碰边锁存"灌进 SR 的水分。
+
+### 5.5 当前状态
+
+- 代码：Stage A–F 已实现并提交；17 项单元测试全绿；10 iter 全量冒烟 **exit 0**。
+- 基线重评：60 s 与 90 s 两档各 200 局已完成（见 §5.2），交付报告
+  `docs/phase0_baseline_60s.md` / `docs/phase0_baseline_90s.md`。
+- **待办**：Stage G 的 4000 iter 全量训练（数天），未启动；见 §7、§8。
 
 ---
 
-## 6. 复现与回退
+## 6. 全量训练时要盯的面板（规格 §10 G2 的落地版本）
+
+| 指标 | 期望 | 异常含义 |
+|---|---|---|
+| `Metrics/robot_goal/path_progress` | 训练早期即非零 | 长期为 0 → 门控/门限把支付全挡了 |
+| `Episode_Reward/progress_along_path` × 90 vs `Episode_Reward/progress` × 90 | 前者 > 后者 | 反转 → 奖励配平失败 |
+| `Metrics/robot_goal/invalid_seg_frac` | 5–10%，稳定 | 上升 → 路径质量退化（膨胀不改变它） |
+| `Metrics/robot_goal/relax_frac` | 12–20%，稳定 | 只监控，**不要**和上一条混看 |
+| `Metrics/robot_goal/blocked_episode` | ≈0.15→0.30 | 与挡路事件概率的 ramp 对齐 |
+| `Metrics/robot_goal/distance_to_path` | 1500 iter 起下降，4000 iter < 0.8 m | 不降 → 查路径项所得占比 |
+| `Policy/raw_log_std_mean` vs `Policy/log_std_max` | 跟随墙面分段下降，且**低于**墙面 | 贴着墙面不动 → 调度未生效 |
+| `Loss/explained_variance` | > 0.5 | 长期 < 0.2 → critic 跟不上（Phase 2 再处理） |
+| `Episode_Termination/base_contact` | 持续下降 | 回升 > 0.4 → 停 |
+| `Episode_Termination/time_out` | < 0.15（90 s） | > 0.25 → 查路径长度分布 |
+| `Metrics/robot_goal/success_rate` | ≥ 重评基线 + 0.10 | — |
+
+> `Metrics/*` 是**在每个 env reset 的那一步采样**的（CommandTerm 的既有行为），所以它们是"回合结束时刻"的
+> 快照，不是全程均值；要看干净的 `d_path` 分位数请用 `scripts/eval_policy.py`。
+
+---
+
+## 7. 复现与回退
 
 - 全量训练（从头，G6）：
 
@@ -139,3 +238,17 @@ cd IsaacLab && ./isaaclab.sh -p ../sru-navigation-sim/scripts/eval_policy.py \
 
 - 回退：每个 Stage 一个 commit；回退到 `docs/agent_doing.md` 之前的状态即可恢复旧管线
   （`path_pipeline="legacy"` + 旧终止 + 旧奖励表本来就是默认值，所以回退只需回退 B2W 配置里的覆盖）。
+
+---
+
+## 8. 下一步建议
+
+1. **先跑 1500 iter 再决定**。4000 iter 要几天，1500 iter（约 1 天）就足以看出方向：
+   `path_progress` 是否非零、`distance_to_path` 是否开始下降、`base_contact` 是否下降。
+2. **验收只用同一套评测口径**：`scripts/eval_policy.py`（新环境，不带 `--legacy_env`）× 200 局 × 60 s，
+   与本文第 5 节的基线对照。标准是 **SR ≥ 基线 + 0.10**，同时 `median d_path < 0.8 m`。
+3. **两组成对指标必须同升**：窄门通过率 ↑ 且 挡路绕行成功率 ↑；只有一组升说明是"过度泛化"而不是学会跟路径。
+4. **如果 1500 iter 时 SR < 基线 − 0.15**：停，按规格 §10 G4 回滚到最近一个有问题的 Stage 定位。
+   最可能的两个原因：门控把支付全挡了（看 `path_progress` 恒 0）或路径项权重压过了目标项（看 `d_path` 下降但 SR 不升）。
+5. Phase 2（规格 §14）等验收通过后再做：挡路率 30 → 35%、噪声上限 0.35 → 0.5 m、TanhNormal + 雅可比修正
+   替换移动墙调度。**不要**在 Phase 1 里做地形课程或全局乱噪。
