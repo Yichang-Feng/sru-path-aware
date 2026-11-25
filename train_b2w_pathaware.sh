@@ -39,6 +39,11 @@ done
 export TERM=xterm
 export CONDA_PREFIX="$CONDA_ENV_DIR"
 export PATH="$CONDA_ENV_DIR/bin:$PATH"
+# The conda env has `rsl_rl` installed editable from another checkout
+# (~/sru-path-aware-official). Put this workspace's copy first on the path so edits made here - the
+# MDPO log_std schedule, the extra logging - are the ones that actually run. Before this line,
+# `import rsl_rl` silently resolved to the other checkout.
+export PYTHONPATH="$SCRIPT_DIR/sru-navigation-learning:$SCRIPT_DIR/sru-navigation-sim${PYTHONPATH:+:$PYTHONPATH}"
 
 cd "$ISAACLAB_DIR"
 

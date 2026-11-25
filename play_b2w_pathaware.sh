@@ -39,6 +39,9 @@ done
 export TERM=xterm
 export CONDA_PREFIX="$CONDA_ENV_DIR"
 export PATH="$CONDA_ENV_DIR/bin:$PATH"
+# Prefer this workspace's `rsl_rl` over the editable install from the other checkout (see the same
+# note in train_b2w_pathaware.sh).
+export PYTHONPATH="$SCRIPT_DIR/sru-navigation-learning:$SCRIPT_DIR/sru-navigation-sim${PYTHONPATH:+:$PYTHONPATH}"
 
 cd "$ISAACLAB_DIR"
 
