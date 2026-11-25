@@ -43,6 +43,19 @@ parser.add_argument("--use_last_checkpoint", action="store_true", help="Use last
 parser.add_argument("--export_jit", action="store_true", default=False, help="Export policy as JIT module.")
 parser.add_argument("--export_onnx", action="store_true", default=False, help="Export policy as ONNX model.")
 parser.add_argument("--max_steps", type=int, default=None, help="Maximum simulation steps to run before exiting.")
+parser.add_argument(
+    "--policy_idx",
+    type=int,
+    default=1,
+    choices=(1, 2),
+    help="Which MDPO actor to run (training mixes both; play used to always use actor 1).",
+)
+parser.add_argument(
+    "--ablate_path",
+    action="store_true",
+    default=False,
+    help="Zero the target_path observation and report how much the action changes (path counterfactual).",
+)
 
 # Append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -257,7 +270,8 @@ def main():
         export_policy_onnx(runner, resume_path)
 
     # Obtain policy for inference
-    policy = runner.get_inference_policy(device=env.unwrapped.device)
+    policy = runner.get_inference_policy(device=env.unwrapped.device, policy_index=args_cli.policy_idx)
+    print(f"[INFO] Using MDPO actor {args_cli.policy_idx} for playback.", flush=True)
 
     # Reset environment
     obs = env.get_observations()
@@ -266,15 +280,32 @@ def main():
     if hasattr(obs, "keys"):
         obs = obs["policy"]
 
+    # Path counterfactual: the path block sits immediately before the image block in the actor
+    # observation (`[proprio, path, image]`), so it can be sliced out positionally.
+    path_slice = None
+    if args_cli.ablate_path:
+        image_dim = int(torch.tensor(agent_cfg.policy.image_input_dims).prod().item())
+        path_len = int(getattr(agent_cfg.policy, "path_length", 60))
+        start = obs.shape[1] - image_dim - path_len
+        path_slice = slice(start, start + path_len)
+        print(f"[INFO] Path ablation: zeroing observation slice {path_slice}", flush=True)
+
     # Simulate environment
     step_count = 0
+    ablate_effect = 0.0
     while simulation_app.is_running():
         if args_cli.max_steps is not None and step_count >= args_cli.max_steps:
             print(f"[INFO] Reached max_steps ({args_cli.max_steps}). Simulation playback finished successfully.", flush=True)
+            if path_slice is not None and step_count > 0:
+                print(f"[INFO] Mean |Δaction| when the path is zeroed: {ablate_effect / step_count:.4f}", flush=True)
             break
         # Run policy
         with torch.inference_mode():
             actions = policy(obs)
+            if path_slice is not None:
+                ablated = obs.clone()
+                ablated[:, path_slice] = 0.0
+                ablate_effect += float(torch.norm(policy(ablated) - actions, dim=-1).mean().item())
         # Step environment
         obs, _, _, _ = env.step(actions)
         if isinstance(obs, tuple):

@@ -56,6 +56,16 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--run_name", type=str, default=None, help="Name of the wandb run (appended to log directory).")
+parser.add_argument(
+    "--no_debug_vis",
+    action="store_true",
+    default=False,
+    help=(
+        "Disable command-term debug markers. They spawn one cuboid per path segment per environment "
+        "(15k instances at 1046 envs) and their prototype USDs are fetched from the Nucleus server, "
+        "so headless training is both faster and able to start without network access."
+    ),
+)
 parser.add_argument("--resume", action="store_true", default=False, help="Resume training from a checkpoint.")
 parser.add_argument("--load_run", type=str, default=None, help="(resume) Regex of the run directory to load.")
 parser.add_argument(
@@ -121,6 +131,10 @@ def main():
         agent_cfg.max_iterations = args_cli.max_iterations
     if args_cli.run_name is not None:
         agent_cfg.run_name = args_cli.run_name
+    if args_cli.no_debug_vis:
+        for term_name, term_cfg in env_cfg.commands.__dict__.items():
+            if getattr(term_cfg, "debug_vis", False):
+                term_cfg.debug_vis = False
     if args_cli.resume:
         agent_cfg.resume = True
     if args_cli.load_run is not None:
