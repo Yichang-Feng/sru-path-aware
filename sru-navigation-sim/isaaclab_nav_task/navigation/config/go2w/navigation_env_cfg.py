@@ -13,7 +13,11 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import RewardTermCfg as RewTerm
 
 from isaaclab_nav_task.navigation.navigation_env_cfg import NavigationEnvCfg, RewardsCfg
-from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import B2WNavigationEnvCfg  # isort: skip
+from isaaclab_nav_task.navigation.config.path_aware import apply_path_aware_v2
+from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import (  # isort: skip
+    B2WNavigationEnvCfg,
+    B2WRewardsCfg,
+)
 import isaaclab_nav_task.navigation.mdp as mdp
 
 from isaaclab_nav_task.navigation.assets import GO2W_CFG, ISAACLAB_NAV_TASKS_ASSETS_DIR  # isort: skip
@@ -399,9 +403,74 @@ class Go2WNavigationEnvCfg_PathAwareNoCurriculum(Go2WNavigationEnvCfg_Phase4):
 
 
 # =============================================================================
-# Phase 5: Fine-Grained Refinement on Full Complexity (vx=1.5 m/s)
+# Path-aware v2 (docs/agent_doing.md) - the same layer the B2W task trains with
 # =============================================================================
 
+
+@configclass
+class Go2WPathAwareRewardsCfg(B2WRewardsCfg):
+    """The B2W path-aware reward set applied to Go2W unchanged.
+
+    Every term is robot-agnostic (metres, seconds, action deltas), and keeping a single definition
+    means a future rebalance cannot land on one robot and silently miss the other. Robot-specific
+    costs (joint limits, low-level controller scaling) stay in the Go2W base config.
+    """
+
+
+@configclass
+class Go2WNavigationEnvCfg_PathAwareV2(Go2WNavigationEnvCfg_Phase4):
+    """Go2W with the path-aware v2 pipeline, rewards, termination, 90 s horizon and observations.
+
+    Built on Phase 4 so the terrain (20 cm stairs, dense corridors, pits; difficulty 0.3-0.8) and
+    the D435 camera are exactly what the existing path-aware task used - only the path-following
+    layer changes.
+    """
+
+    rewards: Go2WPathAwareRewardsCfg = Go2WPathAwareRewardsCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        # `Go2WNavigationEnvCfg.__post_init__` assigns `self.rewards = Go2WRewardsCfg()` unconditionally,
+        # so the field default above is overwritten and the path-aware set has to be re-applied here.
+        self.rewards = Go2WPathAwareRewardsCfg()
+
+        # B2W parity on terrain coverage. Phase 4 keeps `curriculum=True` with
+        # `max_init_terrain_level=GO2W_INIT_LEVEL` (default 0), and the curriculum manager has no
+        # `update_terrain_levels` term wired - so every environment would stay on difficulty row 0
+        # for the whole run. Turning the curriculum off spreads the environments over all six rows
+        # and samples difficulty uniformly inside (0.3, 0.8), which is what the B2W task does.
+        self.scene.terrain.terrain_generator.curriculum = False
+        self.scene.terrain.max_init_terrain_level = 10  # clamped to the available rows
+
+        apply_path_aware_v2(self)
+
+
+@configclass
+class Go2WNavigationEnvCfg_PathAwareV2_PLAY(Go2WNavigationEnvCfg_PathAwareV2):
+    """Playback counterpart: same scene, 60 s horizon, no corruption/pushes, markers on."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 20
+        self.scene.env_spacing = 2.5
+        self.scene.terrain.max_init_terrain_level = None
+        if self.scene.terrain.terrain_generator is not None:
+            self.scene.terrain.terrain_generator.num_rows = 2
+            self.scene.terrain.terrain_generator.num_cols = 2
+
+        self.observations.policy.enable_corruption = False
+        self.events.base_external_force_torque = None
+        self.events.push_robot = None
+        # Playback is for inspection: show the goal/spawn markers and the planned path.
+        self.commands.robot_goal.debug_vis = True
+
+        # Playback keeps the 60 s protocol so results stay comparable with earlier runs.
+        self.episode_length_s = 60.0
+
+
+# =============================================================================
+# Phase 5: Fine-Grained Refinement on Full Complexity (vx=1.5 m/s)
+# =============================================================================
 @configclass
 class Go2WNavigationEnvCfg_Phase5(Go2WNavigationEnvCfg):
     """Phase 5: Trajectory smoothing and fine refinement for real-world deployment."""

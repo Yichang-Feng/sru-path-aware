@@ -5,48 +5,20 @@
 
 """B2W specific configuration for navigation environment."""
 
-import copy
 import os
 
 from isaaclab.utils import configclass
-from isaaclab.managers import RewardTermCfg as RewTerm, ObservationTermCfg as ObsTerm, SceneEntityCfg
+from isaaclab.managers import RewardTermCfg as RewTerm, SceneEntityCfg
 
 from isaaclab_nav_task.navigation.navigation_env_cfg import NavigationEnvCfg, RewardsCfg
+from isaaclab_nav_task.navigation.config.path_aware import apply_path_aware_v2, insert_obs_terms  # noqa: F401
 import isaaclab_nav_task.navigation.mdp as mdp
-from isaaclab_nav_task.navigation.mdp.custom_noise import DeltaTransformPathNoiseCfg
 
 from isaaclab_nav_task.navigation.assets import B2W_CFG, ISAACLAB_NAV_TASKS_ASSETS_DIR  # isort: skip
 
 
 LEG_JOINT_NAMES = [".*hip_joint", ".*thigh_joint", ".*calf_joint"]
 WHEEL_JOINT_NAMES = [".*foot_joint"]
-
-
-def insert_obs_terms(group, before: dict | None = None, after: dict | None = None) -> None:
-    """Insert observation terms into an `ObsGroup` config, keeping `target_path` as the anchor.
-
-    `ObservationManager` enumerates the group with `cfg.__dict__.items()`, so insertion order *is*
-    concatenation order - and `ActorCriticSRU` slices the observation positionally as
-    `[proprio, path, image]`. A term appended the normal way would land after `depth_image` and
-    silently corrupt that split (and the critic's `[proprio, path, time, height, image]` layout).
-
-    Terms in `before` go immediately before `target_path` (they belong to the proprioceptive block),
-    terms in `after` immediately after it (they extend the path block).
-    """
-    before = before or {}
-    after = after or {}
-    existing = set(group.__dict__)
-    before = {k: v for k, v in before.items() if k not in existing}
-    after = {k: v for k, v in after.items() if k not in existing}
-    rebuilt = []
-    for name, value in list(group.__dict__.items()):
-        if name == "target_path":
-            rebuilt.extend(before.items())
-        rebuilt.append((name, value))
-        if name == "target_path":
-            rebuilt.extend(after.items())
-    group.__dict__.clear()
-    group.__dict__.update(rebuilt)
 
 
 
@@ -179,56 +151,10 @@ class B2WNavigationEnvCfg(NavigationEnvCfg):
             "alpha_range_omega": (0.1, 0.6),
         }
 
-        # --- path pipeline v2 (docs/agent_doing.md stages B/C) ---------------------------------
-        # Category mix: optimal paths are the majority now, so "follow the path" is learnable; the
-        # previous [0, 0, 0.5, 0.5] never produced a single clean path.
-        # `deepcopy`: `GlobalPathConfig` is a plain class, so the configclass machinery keeps the
-        # *same instance* as the class default. Mutating it in place would leak v2 into any other
-        # task config built later in the same process (e.g. a base Go2W one).
-        path_cfg = copy.deepcopy(self.commands.robot_goal.path_cfg)
-        self.commands.robot_goal.path_cfg = path_cfg
-        path_cfg.path_pipeline = "v2"
-        path_cfg.category_weights = [0.45, 0.25, 0.20, 0.10]
-        # Measured B2W half-width (0.26 m, widest horizontal extent incl. wheels) + 0.05 m margin.
-        # Deliberately below the PRM's own 4-cell (0.4 m) dilation, which misjudges real 0.8 m doors.
-        path_cfg.seg_padding_m = 0.31
-
-        # --- termination semantics ------------------------------------------------------------
-        # Success requires holding the goal radius for 1.5 s (8 steps) with the counter reset on exit,
-        # and a timeout only counts as success if the robot is inside the radius *on that step*.
-        self.terminations.time_out.params = {"distance_threshold": 0.5, "strict_success": True}
-        self.terminations.early_termination.params = {"distance_threshold": 0.5, "reset_on_exit": True}
-
-        # --- horizon ---------------------------------------------------------------------------
-        # 60 s at ~0.6 m/s covers ~35 m, i.e. barely more than the longest planned paths: every
-        # legitimate detour was a race against the clock. 90 s gives ~55 m of budget.
-        # NOTE: `Episode_Reward/*` is divided by `max_episode_length_s`, so per-episode reward
-        # decompositions must now be multiplied by 90, not 60.
-        self.episode_length_s = 90.0
-
-        # --- observations: local path + distance-to-path ---------------------------------------
-        # Both terms are *inserted* (not appended) to keep the network's positional layout
-        # [proprio, path, image]. See `insert_obs_terms`.
-        def local_path_term():
-            return ObsTerm(
-                func=mdp.generated_path_local_reshaped,
-                params={"command_name": "robot_goal", "flatten": True, "horizon_m": 6.0},
-                noise=DeltaTransformPathNoiseCfg(rotation=0.1, translation=0.5, noise_prob=0.1, remove_dist=False),
-            )
-
-        def distance_term():
-            return ObsTerm(func=mdp.distance_to_path, params={"command_name": "robot_goal"})
-
-        insert_obs_terms(
-            self.observations.policy,
-            before={"distance_to_path": distance_term()},
-            after={"target_path_local": local_path_term()},
-        )
-        insert_obs_terms(
-            self.observations.critic,
-            before={"distance_to_path": distance_term()},
-            after={"target_path_local": local_path_term()},
-        )
+        # --- path-aware v2 layer (docs/agent_doing.md stages B/C) ------------------------------
+        # Path pipeline, path categories, seg padding, termination rule, 90 s horizon and the two
+        # extra observation terms all live in the shared layer so B2W and Go2W cannot drift apart.
+        apply_path_aware_v2(self)
 
         self.scene.terrain.max_init_terrain_level = 10
         self.scene.terrain.terrain_generator.difficulty_range = [0.5, 1.0]

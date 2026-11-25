@@ -56,13 +56,32 @@
 3. **neck 段完全不加噪**：只做拒绝采样不够——它校验的是**稀疏**段，重采样后仍可能切到门框角。因此相邻段任一是 pinch 段的航点直接跳过加噪。
 4. **`infeasible` 类别的新语义**：从"整条路径加 1 m 均匀噪声"改为"GBFS 无 LOS + 保证一处结构化挡路事件"。规格 §2.1 给了权重但没重定义该类别；这样既满足原则 2（不制造穿墙航点作为主分布），又保留了"路径本身不可直接走"的样本。
 
-### 3.3 对 Go2W 的影响
+### 3.3 对 Go2W 的影响（2026-11-25 更新）
 
-- `path_pipeline` 默认 `"legacy"`，`progress_along_path` 的 `per_metre` 默认 False，`at_goal_navigation` 的
-  `reset_on_exit` 默认 False，`time_out_navigation` 的 `strict_success` 默认 False → **Go2W 的普通任务行为不变**。
-- `Go2WNavigationEnvCfg_Paper` 继承 `B2WNavigationEnvCfg`（本仓库原有设计），因此它**会**继承 v2 管线、
-  90 s horizon、新奖励与 2697/5834 维观测；其 runner cfg `Go2WNavMDPORunnerPaperCfg` 继承 B2W 的
-  `path_length=120`，两侧一致，不会静默错位。若要保留旧 Paper 对照，应显式回退这几个字段。
+v2 层抽到了 `navigation/config/path_aware.py::apply_path_aware_v2`，**B2W 与 Go2W 的 path-aware 任务
+调用同一个函数**——这是为了避免两个机器人各自漂移（此前就发生过：一边改了、另一边没改，只有等训练
+结果不对才发现）。
+
+| 任务 | 状态 |
+|---|---|
+| `Isaac-Nav-{MDPO,PPO}-B2W-*` | 全部走 v2 |
+| `Isaac-Nav-{MDPO,PPO}-Go2W-PathAware-{,-Play,-Dev}-v0` | **重指向** `Go2WNavigationEnvCfg_PathAwareV2`（Phase4 地形 + D435 相机 + v2 层）；player 60 s、训练 90 s |
+| `...-Go2W-PathAware-NoCurriculum-*`、Phase1–5、LowObs、Heading、PureMaze | **不变**（仍是 60 s / legacy 管线 / 各自奖励），可复现旧结果 |
+| `Go2WPathAwareRewardsCfg` | 直接继承 `B2WRewardsCfg`（奖励项与机器人无关），`Go2WNavigationEnvCfg.__post_init__` 会无条件覆盖 `self.rewards`，所以 v2 子类在其 `super()` 之后重新赋值 |
+| 地形覆盖 | Phase4 的 `curriculum=True` + `max_init_terrain_level=0`，而 `CurriculumCfg` 里**没有** `update_terrain_levels`，等于全程只训难度第 0 行。v2 子类关掉课程并把 `max_init_terrain_level` 设成 10（全 6 行），和 B2W 一致 |
+| `Go2WNav{MDPO,PPO}RunnerPathAwareV2Cfg` | 直接继承 B2W 的 runner，`seed=42`、`max_iterations=4000`，其余（`path_length=120`、LR/熵退火、`log_std` 移动墙）与 B2W 完全一致 |
+
+Go2W 的观测维度与 B2W 相同（2697 / 5834）：深度项无论 D435 还是 ZED 都是 64×40=2560，height scan 同一网格。
+
+验证：`test_b2w_and_go2w_get_identical_v2_layers` / `test_go2w_v2_runners_match_the_b2w_schedule`
+逐字段比对两边的路径配置、终止参数、观测顺序、奖励权重与调度字段。
+⚠️ **Go2W 的场景级冒烟尚未跑**：本机此时正跑着 B2W 的 4000 iter 全量训练（约占 13.6 GB），
+再起一个 Go2W env（180 tiles）会 OOM。命令已备好，等 GPU 释放后执行：
+
+```bash
+./train_go2w_pathaware.sh --task Isaac-Nav-MDPO-Go2W-PathAware-Dev-v0 \
+  --num_envs 32 --max_iterations 3 --headless --no_debug_vis
+```
 
 ---
 

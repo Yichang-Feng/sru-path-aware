@@ -466,7 +466,6 @@ def test_reward_economics_moving_beats_standing():
 # Stage E4: the training forward pass and the JIT export must agree
 # ---------------------------------------------------------------------------
 
-
 def test_jit_export_matches_training_forward():
     """E4 - exporting with 30 path waypoints must not silently re-slice the observation.
 
@@ -513,3 +512,91 @@ def test_jit_export_matches_training_forward():
             exported_out = exported(obs)
 
     torch.testing.assert_close(exported_out, reference, atol=1e-5, rtol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# The shared path-aware v2 layer: both robots must get exactly the same setup
+# ---------------------------------------------------------------------------
+
+
+def _obs_term_names(group):
+    return [name for name in group.__dict__ if name not in (
+        "enable_corruption", "concatenate_terms", "history_length",
+        "flatten_history_dim", "concatenate_dim",
+    )]
+
+
+def test_b2w_and_go2w_get_identical_v2_layers():
+    """Both tasks go through `apply_path_aware_v2`; assert the resulting layers are identical.
+
+    This is the guard against the failure mode this module exists for: a change applied to one
+    robot's config file and forgotten in the other's.
+    """
+    from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import B2WNavigationEnvCfg
+    from isaaclab_nav_task.navigation.config.go2w.navigation_env_cfg import (
+        Go2WNavigationEnvCfg_PathAwareV2,
+        Go2WNavigationEnvCfg_PathAwareV2_PLAY,
+    )
+
+    b2w = B2WNavigationEnvCfg()
+    go2w = Go2WNavigationEnvCfg_PathAwareV2()
+
+    for cfg in (b2w, go2w):
+        path_cfg = cfg.commands.robot_goal.path_cfg
+        assert path_cfg.path_pipeline == "v2"
+        assert path_cfg.category_weights == [0.45, 0.25, 0.20, 0.10]
+        assert path_cfg.seg_padding_m == pytest.approx(0.31)
+        assert cfg.episode_length_s == pytest.approx(90.0)
+        assert cfg.terminations.time_out.params["strict_success"] is True
+        assert cfg.terminations.early_termination.params["reset_on_exit"] is True
+        # All difficulty rows available from the start (the curriculum manager has no terrain-level
+        # term wired), so a run is not silently pinned to the easiest row.
+        assert cfg.scene.terrain.terrain_generator.curriculum is False
+        assert cfg.scene.terrain.max_init_terrain_level == 10
+
+        # Observation layout: distance_to_path belongs to the proprioceptive block (before
+        # target_path), target_path_local extends the path block (after target_path).
+        for group in (cfg.observations.policy, cfg.observations.critic):
+            names = _obs_term_names(group)
+            assert names.index("distance_to_path") == names.index("target_path") - 1
+            assert names.index("target_path_local") == names.index("target_path") + 1
+
+        # The path-aware reward set, not each robot's legacy one.
+        weights = {n: t.weight for n, t in cfg.rewards.__dict__.items() if hasattr(t, "weight")}
+        assert weights["progress_along_path"] == pytest.approx(1.2)
+        assert weights["progress"] == pytest.approx(0.15)
+        assert weights["goal_reached_bonus"] == pytest.approx(25.0)
+        assert weights["path_deviation_penalty"] == pytest.approx(-0.15)
+        assert weights["time_out_penalty"] == pytest.approx(-50.0)
+
+    # Playback keeps the 60 s protocol on both robots.
+    from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import B2WNavigationEnvCfg_PLAY
+
+    assert B2WNavigationEnvCfg_PLAY().episode_length_s == pytest.approx(60.0)
+    assert Go2WNavigationEnvCfg_PathAwareV2_PLAY().episode_length_s == pytest.approx(60.0)
+
+
+def test_go2w_v2_runners_match_the_b2w_schedule():
+    from isaaclab_nav_task.navigation.config.b2w.agents.rsl_rl_cfg import (
+        B2WNavMDPORunnerCfg,
+        B2WNavPPORunnerCfg,
+    )
+    from isaaclab_nav_task.navigation.config.go2w.agents.rsl_rl_cfg import (
+        Go2WNavMDPORunnerPathAwareV2Cfg,
+        Go2WNavPPORunnerPathAwareV2Cfg,
+    )
+
+    b2w_mdpo, go2w_mdpo = B2WNavMDPORunnerCfg(), Go2WNavMDPORunnerPathAwareV2Cfg()
+    assert go2w_mdpo.policy.path_length == 120 == b2w_mdpo.policy.path_length
+    for field in (
+        "schedule", "min_learning_rate", "entropy_schedule", "min_entropy_coef",
+        "entropy_hold_iters", "entropy_decay_span", "log_std_schedule",
+        "log_std_anneal_start", "log_std_anneal_mid", "log_std_anneal_end",
+        "log_std_max_initial", "log_std_max_mid", "log_std_max_final",
+    ):
+        assert getattr(go2w_mdpo.algorithm, field) == getattr(b2w_mdpo.algorithm, field), field
+    assert go2w_mdpo.algorithm.schedule != "adaptive", "MDPO has no adaptive schedule"
+
+    b2w_ppo, go2w_ppo = B2WNavPPORunnerCfg(), Go2WNavPPORunnerPathAwareV2Cfg()
+    assert go2w_ppo.policy.path_length == 120 == b2w_ppo.policy.path_length
+    assert go2w_ppo.policy.log_std_max == pytest.approx(b2w_ppo.policy.log_std_max)

@@ -340,17 +340,21 @@ gym.register(
 )
 
 # =============================================================================
-# Path-aware aliases used by this isolated workspace.
-# These point at the same Go2W configs, which inherit target_path observations
-# and progress_along_path reward from the path-aware base NavigationEnvCfg.
+# Path-aware v2 aliases used by this isolated workspace.
+#
+# These ids now point at the v2 environment (`Go2WNavigationEnvCfg_PathAwareV2`): clearance-adaptive
+# path noise with locked endpoints, structured blocking events, per-segment feasibility masks, the
+# metre-based gated progress reward, the 1.5 s goal dwell, a 90 s horizon and the 2697/5834-dim
+# observations - i.e. exactly what the B2W task trains with (see docs/agent_doing.md). The previous
+# 60-dim task is still reachable through the Phase/NoCurriculum ids, which are unchanged.
 # =============================================================================
 gym.register(
     id="Isaac-Nav-PPO-Go2W-PathAware-v0",
     entry_point="isaaclab_nav_task.navigation:NavigationEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_Phase4,
-        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavPPORunnerPhase4Cfg,
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_PathAwareV2,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavPPORunnerPathAwareV2Cfg,
     },
 )
 
@@ -359,8 +363,8 @@ gym.register(
     entry_point="isaaclab_nav_task.navigation:NavigationEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_PLAY,
-        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavPPORunnerPhase4Cfg,
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_PathAwareV2_PLAY,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavPPORunnerPathAwareV2Cfg,
     },
 )
 
@@ -369,8 +373,8 @@ gym.register(
     entry_point="isaaclab_nav_task.navigation:NavigationEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_DEV,
-        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavPPORunnerDevCfg,
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_PathAwareV2,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavPPORunnerPathAwareV2DevCfg,
     },
 )
 
@@ -379,8 +383,28 @@ gym.register(
     entry_point="isaaclab_nav_task.navigation:NavigationEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_Phase4,
-        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavMDPORunnerPhase4Cfg,
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_PathAwareV2,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavMDPORunnerPathAwareV2Cfg,
+    },
+)
+
+gym.register(
+    id="Isaac-Nav-MDPO-Go2W-PathAware-Play-v0",
+    entry_point="isaaclab_nav_task.navigation:NavigationEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_PathAwareV2_PLAY,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavMDPORunnerPathAwareV2Cfg,
+    },
+)
+
+gym.register(
+    id="Isaac-Nav-MDPO-Go2W-PathAware-Dev-v0",
+    entry_point="isaaclab_nav_task.navigation:NavigationEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": navigation_env_cfg.Go2WNavigationEnvCfg_PathAwareV2,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.Go2WNavMDPORunnerPathAwareV2DevCfg,
     },
 )
 

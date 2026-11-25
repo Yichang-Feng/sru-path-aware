@@ -12,7 +12,54 @@ from isaaclab_nav_task.navigation.config.rl_cfg import (
     RslRlPpoActorCriticCfg,
     RslRlPpoAlgorithmCfg,
 )
-from isaaclab_nav_task.navigation.config.b2w.agents.rsl_rl_cfg import B2WNavMDPORunnerCfg  # isort: skip
+from isaaclab_nav_task.navigation.config.b2w.agents.rsl_rl_cfg import (  # isort: skip
+    B2WNavMDPORunnerCfg,
+    B2WNavPPORunnerCfg,
+)
+
+
+@configclass
+class Go2WNavMDPORunnerPathAwareV2Cfg(B2WNavMDPORunnerCfg):
+    """Path-aware v2 MDPO runner: identical hyperparameters and schedules to B2W, Go2W naming.
+
+    Inheriting from the B2W runner on purpose. `path_length=120` (30 waypoints), the cosine LR and
+    entropy anneal and the moving `log_std` ceiling must not be re-derived per robot - that is how
+    the two configurations drifted apart before. Only the seed, project and log directory differ.
+    """
+
+    seed = 42
+    wandb_project = "isaaclab_nav_go2w"
+    experiment_name = "go2w_navigation_mdpo_pathaware_v2"
+    # The spec's target is 4000 iterations (~17 h at 1046 envs); `--max_iterations` can extend it.
+    max_iterations = 4000
+
+
+@configclass
+class Go2WNavPPORunnerPathAwareV2Cfg(B2WNavPPORunnerCfg):
+    """PPO ablation arm of the path-aware v2 task (same policy and observation configuration)."""
+
+    seed = 42
+    wandb_project = "isaaclab_nav_go2w"
+    experiment_name = "go2w_navigation_ppo_pathaware_v2"
+    max_iterations = 4000
+
+
+@configclass
+class Go2WNavMDPORunnerPathAwareV2DevCfg(Go2WNavMDPORunnerPathAwareV2Cfg):
+    """Smoke-test variant of the path-aware v2 MDPO runner."""
+
+    max_iterations = 300
+    experiment_name = "go2w_navigation_mdpo_pathaware_v2_dev"
+    logger = "tensorboard"
+
+
+@configclass
+class Go2WNavPPORunnerPathAwareV2DevCfg(Go2WNavPPORunnerPathAwareV2Cfg):
+    """Smoke-test variant of the path-aware v2 PPO runner."""
+
+    max_iterations = 300
+    experiment_name = "go2w_navigation_ppo_pathaware_v2_dev"
+    logger = "tensorboard"
 
 
 @configclass
