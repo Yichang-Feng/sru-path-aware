@@ -765,13 +765,24 @@ class RobotNavigationGoalCommand(CommandTerm):
             cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
             self.current_velocity_marker = VisualizationMarkers(cfg)
 
+        # One thin cuboid per path segment (x-length is scaled per segment in the callback), so the
+        # complete planned path (A* + smoothing, resampled) is drawn as a polyline. Cyan keeps it
+        # distinguishable from the blue goal and orange spawn cubes.
+        if not hasattr(self, "path_marker"):
+            cfg = CUBOID_MARKER_CFG.copy()
+            cfg.prim_path = "/Visuals/Command/planned_path"
+            cfg.markers["cuboid"].size = (1.0, 0.04, 0.04)
+            cfg.markers["cuboid"].visual_material.diffuse_color = (0.0, 1.0, 1.0)
+            self.path_marker = VisualizationMarkers(cfg)
+
         self.goal_marker.set_visibility(True)
         self.spawn_marker.set_visibility(True)
         self.desired_velocity_marker.set_visibility(True)
         self.current_velocity_marker.set_visibility(True)
+        self.path_marker.set_visibility(True)
 
     def _hide_visualizers(self):
-        for name in ["goal_marker", "spawn_marker", "desired_velocity_marker", "current_velocity_marker"]:
+        for name in ["goal_marker", "spawn_marker", "desired_velocity_marker", "current_velocity_marker", "path_marker"]:
             if hasattr(self, name):
                 getattr(self, name).set_visibility(False)
 
@@ -779,6 +790,7 @@ class RobotNavigationGoalCommand(CommandTerm):
         """Update visualization markers."""
         self.goal_marker.visualize(self.goal_position_world)
         self.spawn_marker.visualize(self.spawn_position_world)
+        self._update_path_marker()
 
         arrow_position = self.robot.data.root_pos_w.clone()
         arrow_position[:, 2] += 0.5
@@ -792,6 +804,42 @@ class RobotNavigationGoalCommand(CommandTerm):
             self.robot.data.root_lin_vel_b, is_goal_direction=False
         )
         self.current_velocity_marker.visualize(arrow_position, current_quat, current_scale)
+
+    def _update_path_marker(self):
+        """Draw every env's planned global path in world frame as connected line segments.
+
+        Uses `MultiPath.paths_w`, i.e. the exact path the policy is given in its observations
+        (A* over the PRM, line-of-sight smoothing, resampled to `num_smooth_points`), so the
+        markers show what the robot is actually trying to track.
+        """
+        if self.paths_manager is None:
+            return
+
+        path_w = self.paths_manager.paths_w  # (num_envs, num_points, 3), world frame
+        starts = path_w[:, :-1, :]
+        ends = path_w[:, 1:, :]
+        seg_vecs = ends - starts
+        seg_lens = torch.norm(seg_vecs, dim=-1)  # (num_envs, num_points - 1)
+        midpoints = 0.5 * (starts + ends)
+
+        # Yaw-only orientation: each prototype cuboid's local +x is stretched along the segment.
+        # Segment z-differences are small relative to their horizontal length, so pitch is ignored.
+        yaw = torch.atan2(seg_vecs[..., 1], seg_vecs[..., 0])
+        zeros = torch.zeros_like(yaw)
+        quats = math_utils.quat_from_euler_xyz(zeros, zeros, yaw)
+
+        # Degenerate segments (e.g. a not-yet-rebuilt path, or repeated resample points) get a
+        # near-zero length instead of exactly zero, which the point instancer renders as nothing.
+        scales = torch.stack(
+            (torch.clamp(seg_lens, min=1e-3), torch.ones_like(seg_lens), torch.ones_like(seg_lens)),
+            dim=-1,
+        )
+
+        self.path_marker.visualize(
+            midpoints.reshape(-1, 3),
+            quats.reshape(-1, 4),
+            scales.reshape(-1, 3),
+        )
 
     def _compute_velocity_arrow(
         self,

@@ -463,6 +463,10 @@ class Go2WNavigationEnvCfg_PLAY(Go2WNavigationEnvCfg):
         self.events.base_external_force_torque = None
         self.events.push_robot = None
 
+        # Playback is for inspection: show goal/spawn markers and the planned A* path. Training
+        # keeps the base config's `False` to avoid the per-step marker update cost.
+        self.commands.robot_goal.debug_vis = True
+
 
 @configclass
 class Go2WNavigationEnvCfg_PathAwareNoCurriculum_PLAY(Go2WNavigationEnvCfg_PLAY):

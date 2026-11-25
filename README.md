@@ -74,6 +74,14 @@ Go2W（本工作区新增的 path-aware 任务）：
 - `Isaac-Nav-PPO-Go2W-PathAware-v0`、`Isaac-Nav-MDPO-Go2W-PathAware-v0` 及对应 `*-Play-v0` / `*-Dev-v0`
 - `Isaac-Nav-PPO-Go2W-PathAware-NoCurriculum-v0` 与 `Isaac-Nav-PPO-Go2W-PathAware-NoCurriculum-Play-v0`（论文对齐）
 
+GUI 回放时的坐标系（`robot_goal` 的 debug 可视化，`*-Play-*` 任务默认开启）：
+
+- 青色折线：每个 env 的规划路径，即策略观测里实际使用的 `MultiPath.paths_w`（PRM 上 A*、视线平滑、重采样后的点）
+- 蓝色方块：目标点；橙色方块：出生点
+- 绿色箭头：期望速度方向；红色箭头：当前速度方向
+
+注意路径类别默认是 `highly_non_optimal` / `infeasible` 各 50%，因此有一半路径会明显绕路或带随机噪声——这是训练时的有意设定，不是可视化错误。`--headless` 下标记照常更新但不会显示。
+
 ## Go2W 说明
 
 path-aware sim 分支没有 Go2W 任务；本工作区从原 sru-learning sim 分支 `sru-navigation-sim`（`e6c75f2`）以**加法方式**移植了：
