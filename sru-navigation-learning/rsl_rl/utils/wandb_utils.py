@@ -52,7 +52,12 @@ class WandbSummaryWriter(SummaryWriter):
         # Set wandb run name to match the log directory name
         wandb.run.name = run_name
 
-        wandb.log({"log_dir": run_name})
+        # `log_dir` is metadata, not a metric. Logging it with `wandb.log` (which carries no step)
+        # advances wandb's internal step counter to 1, so every scalar of iteration 0 - logged with
+        # an explicit `step=0` - arrives "less than the current step" and is silently dropped, one
+        # "Tried to log to step 0 that is less than the current step 1" warning per scalar.
+        # Configuration is where metadata belongs, and it does not touch the step counter.
+        wandb.config.update({"log_dir": run_name}, allow_val_change=True)
 
     def store_config(self, env_cfg, runner_cfg, alg_cfg, policy_cfg):
         wandb.config.update({"runner_cfg": runner_cfg})
