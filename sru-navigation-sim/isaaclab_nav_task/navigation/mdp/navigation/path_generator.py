@@ -272,6 +272,12 @@ class MultiPath:
     def _compute_relax(self, seg_passable: torch.Tensor, pinch_mask: torch.Tensor) -> torch.Tensor:
         """Two-sided dilation of the invalid segments, excluding pinch (narrow doorway) neighbourhoods.
 
+        An invalid segment is *always* relaxed: it is infeasible by construction (a blocking event, a
+        non-LOS category, or a chord the body cannot fit through), so leaving the path there is the
+        correct behaviour and must not be punished. The pinch exclusion only protects the
+        *neighbourhood* (left/right dilation) of such segments - a narrow doorway next to a blocked
+        segment must stay strict, otherwise the widened penalty exemption spills onto the doorway.
+
         Only expanding downstream would punish a robot that starts swerving 1-2 m early (its projection
         is still on the upstream, valid segment), which trains late "brake at the wall" behaviour.
         `torch.roll` is deliberately avoided: it would wrap segment 0 into the last segment's state.
@@ -280,7 +286,7 @@ class MultiPath:
         pad = torch.zeros((inv.shape[0], 1), dtype=torch.bool, device=inv.device)
         left = torch.cat([pad, inv[:, :-1]], dim=1)
         right = torch.cat([inv[:, 1:], pad], dim=1)
-        return (inv | left | right) & (~pinch_mask)
+        return inv | ((left | right) & ~pinch_mask)
 
     def _compute_gates(
         self,

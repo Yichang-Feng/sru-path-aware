@@ -170,11 +170,19 @@ class Prm:
                 raise AttributeError(f"PrmConfig has no attribute '{key}'")
 
     def compute_free_mask(self):
-        """Mark cells that are valid ground or platform (i.e. safe to route through)."""
+        """Mark cells that are valid ground or walkable elevation (i.e. safe to route through).
+
+        The range is `[GROUND_MIN, PLATFORM_MAX]` rather than `ground OR platform`: a staircase's
+        treads sit at 40/80/120/160 height units, so the old `(0..10) | (195..205)` union left every
+        riser and tread between the two bands **outside the free mask**. The clearance map is built
+        from this mask, so on a stairs tile the whole flight had clearance 0, every path segment
+        crossing it was flagged impassable (`seg_passable = False` on ~58% of segments, see
+        `docs/v1p1_p0_diagnosis.md` D3) and the payment gate widened to 1.6 m right where the robot
+        must stay exact. Walls sit at 300 units and pits below 0, so a single upper bound at
+        `PLATFORM_MAX` still excludes both.
+        """
         h = self.height_map
-        ground_mask = (h >= THRESHOLDS.GROUND_MIN) & (h <= THRESHOLDS.GROUND_MAX)
-        platform_mask = (h >= THRESHOLDS.PLATFORM_MIN) & (h <= THRESHOLDS.PLATFORM_MAX)
-        self.free_mask = ground_mask | platform_mask
+        self.free_mask = (h >= THRESHOLDS.GROUND_MIN) & (h <= THRESHOLDS.PLATFORM_MAX)
 
     def compute_padding_mask(self):
         """Mark cells near a height "cliff" (large height jump between neighbors) as non-traversable.

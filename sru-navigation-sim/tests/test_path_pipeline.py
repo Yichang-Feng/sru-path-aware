@@ -637,3 +637,232 @@ def test_go2w_v2_runners_match_the_b2w_schedule():
     b2w_ppo, go2w_ppo = B2WNavPPORunnerCfg(), Go2WNavPPORunnerPathAwareV2Cfg()
     assert go2w_ppo.policy.path_length == 120 == b2w_ppo.policy.path_length
     assert go2w_ppo.policy.log_std_max == pytest.approx(b2w_ppo.policy.log_std_max)
+
+
+# ---------------------------------------------------------------------------
+# v1.1 (P1): goal-hotel removal, heading potential, stair free mask, relax semantics
+# ---------------------------------------------------------------------------
+
+
+def test_v11_proximity_rewards_are_zeroed():
+    """U1 - no reward may be paid for *occupying* the goal radius any more."""
+    from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import B2WRewardsCfg
+
+    cfg = B2WRewardsCfg()
+    assert cfg.reach_goal.weight == 0.0
+    assert cfg.reach_goal_xy_tight.weight == 0.0
+    assert cfg.reach_goal_xy_soft.weight == 0.0
+    # the dense brake gradient and the completion bonus are what is left near the goal
+    assert cfg.velocity_at_goal.weight == pytest.approx(-0.2)
+    assert cfg.goal_reached_bonus.weight == pytest.approx(25.0)
+    assert cfg.heading_progress_to_path.weight == pytest.approx(1.0)
+
+
+class FakeRobot:
+    def __init__(self, lin=(1.0, 0.0, 0.0), ang=(0.0, 0.0, 0.5)):
+        self.data = SimpleNamespace(
+            root_lin_vel_b=torch.tensor([list(lin)]),
+            root_ang_vel_b=torch.tensor([list(ang)]),
+            root_lin_vel_w=torch.tensor([[*lin]]),
+        )
+
+
+def test_v11_velocity_at_goal_penalty_only_inside_the_radius():
+    from isaaclab_nav_task.navigation.mdp.rewards import velocity_at_goal_penalty
+
+    goal = FakeGoalCommand()
+    env = dwell_env(0.3, goal)
+    env.scene = {"robot": FakeRobot(lin=(1.0, 0.0, 0.0), ang=(0.0, 0.0, 0.4))}
+
+    set_distance(goal, 0.3)
+    inside = float(velocity_at_goal_penalty(env))
+    set_distance(goal, 2.0)
+    outside = float(velocity_at_goal_penalty(env))
+
+    assert inside == pytest.approx(1.0 + 0.5 * 0.4), "lin + 0.5*|wz| inside the radius"
+    assert outside == 0.0
+
+
+def test_v11_timeout_never_counts_as_success():
+    """U2 - under the dwell rule a completion ends the episode first, so a timeout is a failure."""
+    from isaaclab_nav_task.navigation.mdp.terminations import time_out_navigation
+
+    added = []
+
+    goal = FakeGoalCommand()
+    goal.was_in_goal_at_timeout = torch.zeros(1)
+    goal.goal_reached_buffer = SimpleNamespace(add=lambda value, ids: added.append(value.clone()))
+    set_distance(goal, 0.3)  # inside the radius on the timeout step
+    env = dwell_env(0.3, goal)
+    env.episode_length_buf = torch.tensor([450])  # at the horizon
+    env.max_episode_length = 450
+
+    terminated = time_out_navigation(env, strict_success=True)
+    assert bool(terminated.item())
+    assert added and float(added[-1].sum()) == 0.0, "a timeout must never be credited as success"
+    assert float(goal.was_in_goal_at_timeout.item()) == 1.0, "but it is still counted as a metric"
+
+
+def test_v11_relax_always_includes_invalid_segments():
+    """U3 - an invalid segment is infeasible by construction: leaving the path there must be free."""
+    mp = MultiPath.__new__(MultiPath)
+    # segments 3 and 4 invalid, and the whole neighbourhood 1..6 is a narrow doorway (pinch)
+    seg_passable = torch.ones(1, 14, dtype=torch.bool)
+    seg_passable[0, 3] = False
+    seg_passable[0, 4] = False
+    pinch = torch.zeros(1, 14, dtype=torch.bool)
+    pinch[0, 1:7] = True
+
+    relax = mp._compute_relax(seg_passable, pinch)
+    assert bool(relax[0, 3]) and bool(relax[0, 4]), "invalid segments must be relaxed even inside a pinch"
+    # the pinch neighbourhood of those segments is *not* relaxed: a doorway next to a blocked
+    # segment must stay strict, otherwise the exemption spills onto the door frame
+    assert not bool(relax[0, 2]) and not bool(relax[0, 5])
+    assert not bool(relax[0, 0]), "segment 0 must not be relaxed (no wraparound)"
+
+    # outside a pinch, the neighbours of an invalid segment are relaxed (two-sided dilation)
+    pinch_free = torch.zeros(1, 14, dtype=torch.bool)
+    relax2 = mp._compute_relax(seg_passable, pinch_free)
+    assert bool(relax2[0, 2]) and bool(relax2[0, 5])
+
+
+def make_prm_from_height_map(height_map: np.ndarray) -> Prm:
+    """A `Prm` built by the real mask code (not the hand-set masks the other tests use)."""
+    prm = Prm.__new__(Prm)
+    prm.cfg = PrmConfig(fpr=0.0, fnr=0.0, padding=4, max_height_diff=50.0, N=10)
+    prm.height_map = torch.from_numpy(height_map.astype(np.int16))
+    prm.compute_free_mask()
+    prm.compute_padding_mask()
+    prm._height_np = prm.height_map.numpy()
+    prm._free_np = prm.free_mask.numpy()
+    prm._padding_np = prm.padding_mask.numpy()
+    prm.h_scale = H_SCALE
+    prm.v_scale = V_SCALE
+    prm.size = (height_map.shape[0] * H_SCALE, height_map.shape[1] * H_SCALE)
+    prm.terrain_origin = torch.zeros(3)
+    prm.compute_clearance_map()
+    return prm
+
+
+def stair_height_map(n: int = 200, x0: int = 90, y0: int = 40, y1: int = 160) -> np.ndarray:
+    """5 rises of 0.2 m (40 units) on 0.4 m treads, inside a corridor."""
+    h = np.zeros((n, n), dtype=np.int16)
+    h[:, :y0] = WALL
+    h[:, y1:] = WALL
+    for k in range(5):
+        h[x0 + 4 * k : x0 + 4 * (k + 1), :] = 40 * (k + 1)
+    h[x0 + 20 :, :] = 200
+    return h
+
+
+def test_v11_stairs_are_in_the_free_mask():
+    """U4 - the staircase treads must be free, or the clearance map turns the whole flight into an
+    obstacle and every path across it is flagged impassable (D3: 8.1/14 segments on stairs tiles)."""
+    prm = make_prm_from_height_map(stair_height_map())
+    tread = (90 + 8, 100)  # a middle tread, height 80 units
+    assert prm._free_np[tread], "stair treads must be free"
+    assert prm.clearance_at(tread) > 0.3, f"clearance on a tread was {prm.clearance_at(tread):.2f} m"
+
+    a = np.array([60.0, 100.0, 0.0])
+    b = np.array([140.0, 100.0, 0.0])
+    assert prm.segment_passable(a, b, 0.31), "a chord across the staircase must be passable"
+
+
+class FakePathGoal(FakeGoalCommand):
+    """A goal command whose local path points in a controllable direction."""
+
+    def __init__(self, direction=(1.0, 0.0)):
+        super().__init__()
+        self.direction = direction
+
+    def get_path_local(self, horizon_m: float = 1.5):
+        d = torch.tensor([[*self.direction, 0.0, 0.0]], dtype=torch.float32)
+        return d.unsqueeze(1).repeat(1, 15, 1)
+
+
+def heading_env(distance: float = 5.0) -> tuple:
+    from isaaclab_nav_task.navigation.mdp.rewards import heading_progress_to_path
+
+    goal = FakePathGoal()
+    set_distance(goal, distance)
+    env = dwell_env(distance, goal)
+    env.episode_length_buf = torch.tensor([10], dtype=torch.long)
+    return env, goal, heading_progress_to_path
+
+
+def test_v11_heading_potential_totals_the_initial_error():
+    """U6 - turning 180 deg pays pi in total; oscillating pays nothing."""
+    import math
+
+    env, goal, reward_fn = heading_env()
+    steps = 16
+    total = 0.0
+    for k in range(steps):
+        angle = math.pi * (1.0 - k / steps)  # 180 deg -> 0 over 16 steps
+        goal.direction = (math.cos(angle), math.sin(angle))
+        total += float(reward_fn(env)) * 0.2  # reward manager multiplies by dt
+    assert total == pytest.approx(math.pi, rel=0.1), f"180 deg turn paid {total:.2f}, expected ~pi"
+
+    # oscillation: the same error swinging back and forth must net ~0
+    env2, goal2, reward_fn2 = heading_env()
+    total2 = 0.0
+    for k in range(40):
+        angle = 0.4 if k % 2 == 0 else 0.2
+        goal2.direction = (math.cos(angle), math.sin(angle))
+        total2 += float(reward_fn2(env2)) * 0.2
+    assert abs(total2) < 0.25, f"oscillation paid {total2:.2f}, expected ~0"
+
+
+def test_v11_heading_potential_has_no_spike_at_a_corner():
+    """U6b - a 90 deg corner swings the carrot; the per-step payment must stay clamped."""
+    import math
+
+    env, goal, reward_fn = heading_env()
+    goal.direction = (math.cos(math.pi / 2), math.sin(math.pi / 2))
+    reward_fn(env)  # seed
+    goal.direction = (1.0, 0.0)  # the carrot jumped by 90 deg in one step
+    step_reward = float(reward_fn(env)) * 0.2
+    assert step_reward <= 0.2 + 1e-6, f"corner produced a spike of {step_reward:.3f}"
+
+
+def test_v11_heading_error_observation_uses_the_lookahead_point():
+    """U7 - sample 0 of the local path sits on the robot (degenerate); the bearing must come from
+    the last sample."""
+    import math
+
+    from isaaclab_nav_task.navigation.mdp.observations import path_heading_error
+
+    goal = FakePathGoal(direction=(0.0, 1.0))
+    env = dwell_env(5.0, goal)
+    env.episode_length_buf = torch.tensor([10], dtype=torch.long)
+    obs = path_heading_error(env)
+    assert obs.shape == (1, 2)
+    assert float(obs[0, 0]) == pytest.approx(math.cos(math.pi / 2), abs=1e-5)
+    assert float(obs[0, 1]) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_v11_log_std_schedule_reaches_the_final_wall_by_3600():
+    """U8 - the compressed schedule must actually reach the final wall inside a 4000-iteration run."""
+    from types import SimpleNamespace as NS
+
+    from rsl_rl.algorithms.mdpo import MDPO
+
+    fake = NS(
+        log_std_schedule="cosine",
+        log_std_anneal_start=600,
+        log_std_anneal_mid=2200,
+        log_std_anneal_end=3600,
+        log_std_max_initial=0.1,
+        log_std_max_mid=-0.6,
+        log_std_max_final=-1.0,
+        actor_critic_1=NS(),
+        actor_critic_2=NS(),
+    )
+    MDPO._update_log_std_bounds(fake, 600)
+    assert fake.current_log_std_max == pytest.approx(0.1)
+    MDPO._update_log_std_bounds(fake, 2200)
+    assert fake.current_log_std_max == pytest.approx(-0.6)
+    MDPO._update_log_std_bounds(fake, 3600)
+    assert fake.current_log_std_max == pytest.approx(-1.0)
+    MDPO._update_log_std_bounds(fake, 4000)
+    assert fake.current_log_std_max == pytest.approx(-1.0)

@@ -394,6 +394,10 @@ class RobotNavigationGoalCommand(CommandTerm):
         self.required_steps_at_goal = int(round(GOAL_DWELL_TIME_S / self.env.step_dt))
         # Single-step pulse on the step the dwell requirement is met (read by `goal_reached_bonus`).
         self.goal_dwell_completed = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # Fraction of episodes whose clock ran out while the robot happened to be inside the radius.
+        # Not a success under the v1.1 rule (a completion always ends the episode first), but a direct
+        # measure of goal-hotel behaviour - reported as `Metrics/robot_goal/in_goal_at_timeout`.
+        self.was_in_goal_at_timeout = torch.zeros(self.num_envs, device=self.device)
 
         self.initial_distance_to_goal = torch.zeros(self.num_envs, device=self.device)
         self.distance_to_goal = torch.zeros(self.num_envs, device=self.device)
@@ -751,6 +755,7 @@ class RobotNavigationGoalCommand(CommandTerm):
         velocity_2d = self.robot.data.root_state_w[:, 7:9]
 
         self.metrics["velocity_magnitude"] = torch.norm(velocity_2d, dim=1)
+        self.metrics["in_goal_at_timeout"] = self.was_in_goal_at_timeout
 
         direction_to_goal = position_error_2d / torch.clamp(torch.norm(position_error_2d, dim=1, keepdim=True), min=1e-6)
         self.metrics["velocity_toward_goal"] = (velocity_2d * direction_to_goal).sum(dim=1)

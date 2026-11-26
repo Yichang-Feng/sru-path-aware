@@ -1,0 +1,159 @@
+{
+  "d1_turn_in_place": [
+    {
+      "omega_cmd": 0.3,
+      "yaw_rate_mean": 0.2815576195716858,
+      "yaw_rate_per_env": [
+        0.307,
+        0.232,
+        0.274,
+        0.314
+      ],
+      "drift_mean_m": 0.23314684629440308,
+      "drift_max_m": 0.2736984193325043
+    },
+    {
+      "omega_cmd": 0.6,
+      "yaw_rate_mean": 0.549382209777832,
+      "yaw_rate_per_env": [
+        0.569,
+        0.615,
+        0.447,
+        0.566
+      ],
+      "drift_mean_m": 0.26308971643447876,
+      "drift_max_m": 0.32046353816986084
+    },
+    {
+      "omega_cmd": 1.0,
+      "yaw_rate_mean": 0.9789509177207947,
+      "yaw_rate_per_env": [
+        1.084,
+        0.909,
+        0.871,
+        1.051
+      ],
+      "drift_mean_m": 0.15735211968421936,
+      "drift_max_m": 0.23786775767803192
+    }
+  ],
+  "d1b_stairs": [
+    {
+      "speed": 0.2,
+      "angle_deg": 0.0,
+      "height_gain_mean_m": 0.09960009157657623,
+      "height_gain_per_env": [
+        0.287,
+        0.161,
+        0.089,
+        -0.139
+      ],
+      "climbed": false,
+      "moved_m": 1.3919098377227783
+    },
+    {
+      "speed": 0.2,
+      "angle_deg": 15.0,
+      "height_gain_mean_m": -0.03138600289821625,
+      "height_gain_per_env": [
+        0.144,
+        0.059,
+        -0.118,
+        -0.211
+      ],
+      "climbed": false,
+      "moved_m": 0.7374734878540039
+    },
+    {
+      "speed": 0.2,
+      "angle_deg": 30.0,
+      "height_gain_mean_m": -0.005643904209136963,
+      "height_gain_per_env": [
+        -0.045,
+        -0.247,
+        0.205,
+        0.065
+      ],
+      "climbed": false,
+      "moved_m": 0.8363462090492249
+    },
+    {
+      "speed": 0.5,
+      "angle_deg": 0.0,
+      "height_gain_mean_m": 0.18407410383224487,
+      "height_gain_per_env": [
+        0.177,
+        0.247,
+        0.177,
+        0.134
+      ],
+      "climbed": false,
+      "moved_m": 3.315701484680176
+    },
+    {
+      "speed": 0.5,
+      "angle_deg": 15.0,
+      "height_gain_mean_m": 0.02993793785572052,
+      "height_gain_per_env": [
+        -0.003,
+        0.061,
+        -0.122,
+        0.183
+      ],
+      "climbed": false,
+      "moved_m": 0.7706748247146606
+    },
+    {
+      "speed": 0.5,
+      "angle_deg": 30.0,
+      "height_gain_mean_m": 0.10025974363088608,
+      "height_gain_per_env": [
+        -0.003,
+        0.162,
+        0.097,
+        0.145
+      ],
+      "climbed": false,
+      "moved_m": 1.4221842288970947
+    },
+    {
+      "speed": 0.8,
+      "angle_deg": 0.0,
+      "height_gain_mean_m": 0.13375231623649597,
+      "height_gain_per_env": [
+        0.182,
+        0.108,
+        0.167,
+        0.077
+      ],
+      "climbed": false,
+      "moved_m": 6.967807769775391
+    },
+    {
+      "speed": 0.8,
+      "angle_deg": 15.0,
+      "height_gain_mean_m": 0.03156423196196556,
+      "height_gain_per_env": [
+        -0.225,
+        0.142,
+        -0.217,
+        0.426
+      ],
+      "climbed": false,
+      "moved_m": 2.693002700805664
+    },
+    {
+      "speed": 0.8,
+      "angle_deg": 30.0,
+      "height_gain_mean_m": 0.020506955683231354,
+      "height_gain_per_env": [
+        0.073,
+        -0.23,
+        0.036,
+        0.203
+      ],
+      "climbed": false,
+      "moved_m": 3.352665424346924
+    }
+  ]
+}

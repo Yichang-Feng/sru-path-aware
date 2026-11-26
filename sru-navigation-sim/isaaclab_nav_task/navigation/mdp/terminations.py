@@ -72,7 +72,13 @@ def time_out_navigation(
 
     if env_ids.numel() > 0:  # Check if env_ids is not empty
         if strict_success:
-            success_masks = distance_goal < distance_threshold
+            # Under the v1.1 dwell rule a completion always ends the episode first, so **any**
+            # timeout is a failure by definition. Crediting "inside the radius on the timeout step"
+            # still paid for the goal-hotel behaviour: the robot orbits the goal, and ~1/3 of the
+            # time it happens to be inside when the clock runs out (measured gap between the
+            # success tracker and the completion bonus: 0.29 vs 0.21 in the v1 run).
+            success_masks = torch.zeros_like(distance_goal, dtype=torch.bool)
+            goal_cmd_generator.was_in_goal_at_timeout[distance_goal < distance_threshold] += 1.0
         else:
             success_masks = goal_cmd_generator.time_at_goal > 0.0
         value_buffer = torch.zeros_like(distance_goal)  # init with 0: Fail

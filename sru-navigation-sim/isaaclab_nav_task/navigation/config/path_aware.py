@@ -43,6 +43,9 @@ DEFAULT_PATH_CATEGORY_WEIGHTS = [0.45, 0.25, 0.20, 0.10]
 DEFAULT_SEG_PADDING_M = 0.31
 DEFAULT_EPISODE_LENGTH_S = 90.0
 LOCAL_PATH_HORIZON_M = 6.0
+# Lookahead used by both `heading_progress_to_path` (reward) and `path_heading_error` (observation):
+# ~1.8 s of travel at 0.8 m/s, so the heading term leads the corner instead of chasing it.
+HEADING_LOOKAHEAD_M = 1.5
 
 
 def insert_obs_terms(group, before: dict | None = None, after: dict | None = None) -> None:
@@ -115,9 +118,15 @@ def apply_path_aware_v2(
     def distance_term():
         return ObsTerm(func=mdp.distance_to_path, params={"command_name": "robot_goal"})
 
+    def heading_error_term():
+        return ObsTerm(
+            func=mdp.path_heading_error,
+            params={"command_name": "robot_goal", "lookahead_m": HEADING_LOOKAHEAD_M},
+        )
+
     for group in (env_cfg.observations.policy, env_cfg.observations.critic):
         insert_obs_terms(
             group,
-            before={"distance_to_path": distance_term()},
+            before={"path_heading_error": heading_error_term(), "distance_to_path": distance_term()},
             after={"target_path_local": local_path_term()},
         )

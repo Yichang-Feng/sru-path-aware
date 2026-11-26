@@ -57,8 +57,8 @@ class B2WNavMDPORunnerCfg(RslRlOnPolicyRunnerCfg):
         entropy_coef=0.001,
         entropy_schedule="cosine",
         min_entropy_coef=0.0,
-        entropy_hold_iters=500,
-        entropy_decay_span=3500,
+        entropy_hold_iters=400,
+        entropy_decay_span=2600,
         num_learning_epochs=5,
         num_mini_batches=4,
         # Cosine decay to a 1e-4 floor. NOT "adaptive": MDPO does not implement it and the LR would
@@ -70,12 +70,14 @@ class B2WNavMDPORunnerCfg(RslRlOnPolicyRunnerCfg):
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
-        # Moving ceiling on the action noise: 0.1 -> -0.6 (iter 1000-5000) -> -1.0 (iter 5000-8000).
-        # A one-off clamp cannot work - log_std parks on the wall with zero gradient.
+        # Moving ceiling on the action noise, compressed into the 4000 iterations this task actually
+        # runs: 0.1 -> -0.6 (600-2200) -> -1.0 (2200-3600). With the previous 1000/5000/8000 schedule
+        # the run never entered its low-noise phase (at iter 4000 sigma was still 0.61), which makes
+        # both "learn to brake inside 0.5 m" and "learn to turn" harder than they need to be.
         log_std_schedule="cosine",
-        log_std_anneal_start=1000,
-        log_std_anneal_mid=5000,
-        log_std_anneal_end=8000,
+        log_std_anneal_start=600,
+        log_std_anneal_mid=2200,
+        log_std_anneal_end=3600,
         log_std_max_initial=0.1,
         log_std_max_mid=-0.6,
         log_std_max_final=-1.0,

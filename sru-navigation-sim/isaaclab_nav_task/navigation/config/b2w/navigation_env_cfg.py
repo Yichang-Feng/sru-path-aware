@@ -33,12 +33,18 @@ class B2WRewardsCfg(RewardsCfg):
 
       progress_along_path : 1.2 per metre paid by the gated path tracker  ~+30
       progress (direct)   : 0.15 per metre of straight-line gain          ~+2.5
+      heading_progress    : 1.0 per radian turned towards the path tangent ~+3 on a 180 deg start
       goal_reached_bonus  : +25 one-shot on completing the 1.5 s dwell     +25
-      reach_goal          : +2.0 per step inside 0.5 m (during the dwell)  ~+3
       path_deviation      : -0.15 per metre beyond a 0.5 m corridor        ~0 when on path
+      velocity_at_goal    : -0.2 x speed inside 0.5 m                      -(arrive slowly)
       time_out            : -50 on a true 90 s horizon timeout
 
-    The path term now *dominates* the direct one (roughly 10:1 in favour of the path, instead of the
+    **There is no positive reward for occupying the goal radius** (v1.1). Every `reach_goal*` term is
+    weighted 0: a per-step income near the terminal state, combined with "completing ends the
+    episode", makes "orbit the goal and never finish" the optimal policy - measured as 34.2/episode
+    of in-goal income against a 5.4 completion bonus in the v1 run.
+
+    The path term *dominates* the direct one (roughly 10:1 in favour of the path, instead of the
     previous 22:1 against it), which is what makes the path a binding constraint rather than a hint.
     """
 
@@ -60,22 +66,42 @@ class B2WRewardsCfg(RewardsCfg):
     # Kept small on purpose: this is the term that let the robot ignore the path entirely when it
     # outweighed the path reward 22:1 per episode.
     progress = RewTerm(func=mdp.progress_to_goal, weight=0.15, params={"command_name": "robot_goal"})
+    # v1.1: **zeroed**. Any positive reward for *occupying* the goal radius is a farmable income
+    # stream, and completing the dwell terminates the episode - so for any per-step income the
+    # rational policy is "stay inside, never finish" (measured: in-goal income 34.2/episode vs a
+    # 5.4 completion bonus, 53 of 200 episodes stopping exactly one step short of the dwell).
+    # A speed gate is not enough: a slow orbit still collects most of it. The only positive event
+    # near the goal now is the one-shot `goal_reached_bonus`; `velocity_at_goal` penalises loitering.
+    # `RewardManager` skips terms whose weight is 0, so nothing is even evaluated.
     reach_goal = RewTerm(
         func=mdp.reach_goal_direct,
-        weight=2.0,
+        weight=0.0,
         params={"command_name": "robot_goal", "distance_threshold": 0.5},
     )
     goal_reached_bonus = RewTerm(
         func=mdp.goal_reached_bonus, weight=25.0, params={"command_name": "robot_goal"}
     )
-    # Terminal shaping around the goal radius. `instant_arrive` drops the legacy "ever entered the
-    # radius" latch; T_r 0.1 -> 0.2 halves the per-step peak. The soft term keeps its inherited
-    # weight and shaping, but must also gate on the *current* distance: with the dwell rule the robot
-    # can leave the goal and keep wandering, and a latched soft term would pay it 0.05/step for the
-    # rest of a 90 s episode (up to +17.5 for one touch).
+    # Dense *negative* term inside the radius: it pays nothing for being there, but gives the
+    # "arrive slowly" gradient that the zeroed shaping terms used to provide by accident.
+    velocity_at_goal = RewTerm(
+        func=mdp.velocity_at_goal_penalty,
+        weight=-0.2,
+        params={"command_name": "robot_goal", "distance_threshold": 0.5},
+    )
+    # Heading potential towards the path tangent (see `mdp.heading_progress_to_path`). Without it the
+    # only heading gradient in the table points at the *goal*, and a path that starts behind the robot
+    # gives it no reason to turn (P0 D4/D5: 120-180 deg episodes freeze 15-30x more than aligned ones).
+    heading_progress_to_path = RewTerm(
+        func=mdp.heading_progress_to_path,
+        weight=1.0,
+        params={"command_name": "robot_goal", "lookahead_m": 1.5},
+    )
+    # Terminal shaping around the goal radius: **zeroed in v1.1** for the same reason as
+    # `reach_goal`. `instant_arrive` (which dropped the legacy latch) stays in the params so the
+    # config still records what these terms used to do.
     reach_goal_xy_soft = RewTerm(
         func=mdp.reach_goal_xyz,
-        weight=0.25,
+        weight=0.0,
         params={
             "command_name": "robot_goal",
             "sigmoid": 2.5,
@@ -88,7 +114,7 @@ class B2WRewardsCfg(RewardsCfg):
     )
     reach_goal_xy_tight = RewTerm(
         func=mdp.reach_goal_xyz,
-        weight=0.75,
+        weight=0.0,
         params={
             "command_name": "robot_goal",
             "sigmoid": 0.25,

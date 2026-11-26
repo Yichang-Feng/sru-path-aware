@@ -262,6 +262,53 @@ def heading_alignment(
     fade = torch.clamp((dist - 0.2) / max(distance_threshold - 0.2, 1e-4), min=0.0, max=1.0)
     return fade * cos_heading
 
+def heading_progress_to_path(
+    env: ManagerBasedRLEnv,
+    command_name: str = "robot_goal",
+    lookahead_m: float = 1.5,
+    fade_distance_m: float = 1.0,
+    max_step_rad: float = 0.2,
+) -> torch.Tensor:
+    """Potential-shaped reward for turning the body towards the *path tangent*.
+
+    Why a potential: the path-progress terms are pure position signals - turning in place moves the
+    robot nowhere, so they give the heading exactly zero gradient. With no term paying for alignment,
+    the only heading optimum left in the reward table is `progress` (facing the goal), which is why
+    the policy froze or reversed instead of turning when the path started behind it (P0 diagnosis
+    D4/D5). A *state-occupancy* fix (pay while facing the path) would just be another farmable term,
+    so this pays the **decrease** in heading error instead: the episode total is bounded by the
+    initial error, and oscillating nets zero.
+
+    The error is measured to the point `lookahead_m` ahead on the path (the last of
+    `get_path_local`'s 15 samples: index 0 sits on the robot and its direction is degenerate) and
+    clamped per step to `max_step_rad`, which is what the low level can actually turn in one step.
+    That clamp is also what keeps a sharp corner from producing a reward spike: at a 90 degree turn
+    the carrot jumps, and without the clamp the potential would pay the whole jump at once.
+
+    Fades to zero within `fade_distance_m` of the goal: the terminal behaviour is governed by the
+    dwell and by `velocity_at_goal_penalty`, and a heading term there has no purpose.
+    """
+    goal_cmd: RobotNavigationGoalCommand = env.command_manager.get_term(command_name)
+    local = goal_cmd.get_path_local(lookahead_m)  # (B, 15, 4): unit dir xyz + normalized log dist
+    direction = local[:, -1, :2]
+    err = torch.atan2(direction[:, 1], direction[:, 0]).abs()  # [0, pi]
+
+    prev = getattr(env, "_prev_path_heading_err", None)
+    if prev is None or prev.shape != err.shape:
+        # First call (or a different env batch): no history, so there is no progress to pay yet.
+        env._prev_path_heading_err = err.clone()
+        return torch.zeros_like(err)
+    delta = torch.clamp(prev - err, -max_step_rad, max_step_rad)
+    env._prev_path_heading_err = err.clone()
+    delta = torch.where(env.episode_length_buf <= 1, torch.zeros_like(delta), delta)
+
+    dist_goal = torch.norm(goal_cmd._get_unscaled_command()[:, :2], dim=1)
+    fade = torch.clamp(dist_goal / max(fade_distance_m, 1e-6), 0.0, 1.0)
+    # Divided by dt so the configured weight is "reward per radian turned" - the reward manager
+    # multiplies every term by dt again.
+    return fade * delta / env.step_dt
+
+
 def velocity_at_goal_penalty(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
