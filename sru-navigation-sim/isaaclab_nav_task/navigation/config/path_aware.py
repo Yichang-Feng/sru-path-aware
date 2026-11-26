@@ -7,7 +7,7 @@
 
 Why this module exists
 ----------------------
-The redesign in `docs/agent_doing.md` changes six things at once (path pipeline, progress
+The redesign in `docs/specs/agent_doing.md` changes six things at once (path pipeline, progress
 accounting, reward balance, goal dwell, horizon, observations). Applying them by hand to each
 task is exactly how the two robots drifted apart before: the R2B2W/Go2W configs are separate
 files, and a change made in one silently missing from the other is invisible until a run is

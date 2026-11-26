@@ -177,7 +177,7 @@ class Prm:
         riser and tread between the two bands **outside the free mask**. The clearance map is built
         from this mask, so on a stairs tile the whole flight had clearance 0, every path segment
         crossing it was flagged impassable (`seg_passable = False` on ~58% of segments, see
-        `docs/v1p1_p0_diagnosis.md` D3) and the payment gate widened to 1.6 m right where the robot
+        `docs/reports/v1p1_p0_diagnosis.md` D3) and the payment gate widened to 1.6 m right where the robot
         must stay exact. Walls sit at 300 units and pits below 0, so a single upper bound at
         `PLATFORM_MAX` still excludes both.
         """

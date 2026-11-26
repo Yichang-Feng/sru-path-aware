@@ -345,7 +345,7 @@ gym.register(
 # These ids now point at the v2 environment (`Go2WNavigationEnvCfg_PathAwareV2`): clearance-adaptive
 # path noise with locked endpoints, structured blocking events, per-segment feasibility masks, the
 # metre-based gated progress reward, the 1.5 s goal dwell, a 90 s horizon and the 2697/5834-dim
-# observations - i.e. exactly what the B2W task trains with (see docs/agent_doing.md). The previous
+# observations - i.e. exactly what the B2W task trains with (see docs/specs/agent_doing.md). The previous
 # 60-dim task is still reachable through the Phase/NoCurriculum ids, which are unchanged.
 # =============================================================================
 gym.register(

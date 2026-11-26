@@ -403,7 +403,7 @@ class Go2WNavigationEnvCfg_PathAwareNoCurriculum(Go2WNavigationEnvCfg_Phase4):
 
 
 # =============================================================================
-# Path-aware v2 (docs/agent_doing.md) - the same layer the B2W task trains with
+# Path-aware v2 (docs/specs/agent_doing.md) - the same layer the B2W task trains with
 # =============================================================================
 
 

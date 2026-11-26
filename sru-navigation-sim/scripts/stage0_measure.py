@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage 0 blocking measurements for the B2W path-aware redesign.
 
-Runs the blocking measurements M1-M5 (see `docs/agent_doing.md`, section 3) and writes a
+Runs the blocking measurements M1-M5 (see `docs/specs/agent_doing.md`, section 3) and writes a
 markdown report. This script only *measures* - it never changes a training config and never
 writes training code.
 
@@ -12,7 +12,7 @@ writes training code.
     M5  Fraction of `optimal`-category path segments that fail `check_padding=True`
 
 Usage:
-    ./isaaclab.sh -p scripts/stage0_measure.py --headless --out docs/phase0_measurements.md
+    ./isaaclab.sh -p scripts/stage0_measure.py --headless --out docs/evals/phase0_measurements.md
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ parser.add_argument("--num_rows", type=int, default=4, help="Terrain tiles rows 
 parser.add_argument("--num_cols", type=int, default=10, help="Terrain tiles cols for the measurement scene.")
 parser.add_argument("--prm_n", type=int, default=300, help="PRM node count used for the measurement scene.")
 parser.add_argument("--num_paths", type=int, default=100, help="How many optimal paths to sample for M5.")
-parser.add_argument("--out", type=str, default="docs/phase0_measurements.md", help="Report output path.")
+parser.add_argument("--out", type=str, default="docs/evals/phase0_measurements.md", help="Report output path.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
 

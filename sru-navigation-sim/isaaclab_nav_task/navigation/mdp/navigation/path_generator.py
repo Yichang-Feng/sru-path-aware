@@ -94,7 +94,7 @@ class GlobalPathConfig:
         # "legacy" keeps the original pipeline byte-for-byte (Go2W depends on it). "v2" is the
         # B2W path-aware redesign: clearance-adaptive noise on sparse points, locked endpoints,
         # structured local blocking events, per-segment feasibility masks and a metric progress
-        # gate. See docs/agent_doing.md.
+        # gate. See docs/specs/agent_doing.md.
         self.path_pipeline = path_pipeline
         self.seg_padding_m = seg_padding_m
         self.noise_max_m = noise_max_m

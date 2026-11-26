@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Evaluate a navigation checkpoint episode-by-episode and report SR / SPL by terrain type.
 
-Stage 0.5 of `docs/agent_doing.md`: the acceptance baseline. The training logs report a rolling
+Stage 0.5 of `docs/specs/agent_doing.md`: the acceptance baseline. The training logs report a rolling
 success rate produced by a *different* termination rule (latched "ever touched the goal"), so any
 comparison against the old `Metrics/robot_goal/success_rate` is meaningless after the switch to
 continuous dwell. This script measures the policy under the rules the environment is configured
@@ -9,7 +9,7 @@ with now, bucketed by terrain type, so before/after comparisons are apples to ap
 
 Usage:
     python scripts/eval_policy.py --task Isaac-Nav-MDPO-B2W-Play-v0 \
-        --checkpoint <path/to/model_6000.pt> --episodes 200 --out docs/phase0_baseline.md \
+        --checkpoint <path/to/model_6000.pt> --episodes 200 --out docs/evals/phase0_baseline_60s.md \
         [--episode_length_s 90] [--policy_idx 1]
 
 Outputs a markdown table plus a JSON blob with the raw per-episode records.

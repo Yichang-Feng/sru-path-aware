@@ -3,7 +3,7 @@
 
 Why this exists
 ---------------
-The V1.1 review (`docs/agent_do_qwen.md` §3.3) claimed that a resampled ~1.5 m chord across a
+The V1.1 review (`docs/specs/agent_do_qwen.md` §3.3) claimed that a resampled ~1.5 m chord across a
 0.2 m staircase necessarily violates `max_height_diff` (0.67 m of rise over the chord vs a 0.25 m
 threshold), and on that basis proposed rewriting `Prm.segment_passable`. Reading the code shows
 `segment_passable` compares **consecutive cells** along the segment (`prm.py`), not the two

@@ -15,7 +15,7 @@ Terminations are disabled for the probe (no goal resets, no falls ending the epi
 never silently cut short; the run duration is bounded by --steps.
 
 Usage:
-    python scripts/p0_low_level_probe.py --task Isaac-Nav-MDPO-B2W-Play-v0 --out docs/v1p1_p0_probe.json
+    python scripts/p0_low_level_probe.py --task Isaac-Nav-MDPO-B2W-Play-v0 --out docs/evals/v1p1_p0_probe.json
 """
 
 from __future__ import annotations

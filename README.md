@@ -130,7 +130,7 @@ B2W 全部任务与 Go2W 的 `*-PathAware-*` 任务现在共用同一层实现
 | 观测 | 2697 / 5834（全局路径 60 + 局部 6 m 路径 60 + `distance_to_path` 1） |
 | 训练 | MDPO：LR cosine→1e-4、熵退火到 0、`log_std_max` 0.1→−0.6→−1.0 移动墙 |
 
-完整规格见 `docs/agent_doing.md`；M1–M5 实测、实施取舍、17+2 项单测与基线重评见 `docs/phase0_baseline_report.md`。
+完整规格见 `docs/specs/agent_doing.md`；M1–M5 实测、实施取舍、17+2 项单测与基线重评见 `docs/reports/phase0_baseline_report.md`。
 
 两个运行前提（都在这台机器上踩过）：
 

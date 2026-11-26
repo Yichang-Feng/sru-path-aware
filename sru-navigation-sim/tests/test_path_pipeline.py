@@ -1,6 +1,6 @@
 """Unit tests for the v2 path pipeline, the metric progress accounting and the goal dwell.
 
-These are the acceptance tests from `docs/agent_doing.md` stages A4, B9 and C1. They run against a
+These are the acceptance tests from `docs/specs/agent_doing.md` stages A4, B9 and C1. They run against a
 synthetic height field and a hand-built roadmap, so they exercise the real `Prm` / `GlobalPath` /
 `MultiPath` code without needing a full Isaac Lab environment.
 

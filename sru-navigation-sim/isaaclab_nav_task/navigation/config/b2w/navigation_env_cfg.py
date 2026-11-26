@@ -26,7 +26,7 @@ WHEEL_JOINT_NAMES = [".*foot_joint"]
 class B2WRewardsCfg(RewardsCfg):
     """B2W rewards: follow the planned path, with bounded autonomy to go around what is not on it.
 
-    Design spec: `docs/agent_doing.md` section 2.5. Every term is multiplied by `dt` (0.2 s) by the
+    Design spec: `docs/specs/agent_doing.md` section 2.5. Every term is multiplied by `dt` (0.2 s) by the
     reward manager and every `Episode_Reward/*` log entry is divided by `max_episode_length_s` (90 s).
 
     Per-episode budget (an ideal 25 m path is ~125 steps):
@@ -177,7 +177,7 @@ class B2WNavigationEnvCfg(NavigationEnvCfg):
             "alpha_range_omega": (0.1, 0.6),
         }
 
-        # --- path-aware v2 layer (docs/agent_doing.md stages B/C) ------------------------------
+        # --- path-aware v2 layer (docs/specs/agent_doing.md stages B/C) ------------------------------
         # Path pipeline, path categories, seg padding, termination rule, 90 s horizon and the two
         # extra observation terms all live in the shared layer so B2W and Go2W cannot drift apart.
         apply_path_aware_v2(self)

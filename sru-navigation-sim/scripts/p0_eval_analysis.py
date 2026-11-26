@@ -2,7 +2,7 @@
 """Aggregate the P0 diagnostics (D3-D8) out of an `eval_policy.py` episode dump.
 
 Usage:
-    python scripts/p0_eval_analysis.py docs/v1p1_p0_eval.json [--out docs/v1p1_p0_eval.md]
+    python scripts/p0_eval_analysis.py docs/evals/v1p1_p0_eval.json [--out docs/evals/v1p1_p0_eval.md]
 """
 
 from __future__ import annotations
