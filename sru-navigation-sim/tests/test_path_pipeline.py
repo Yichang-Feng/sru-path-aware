@@ -854,6 +854,30 @@ def test_v11_heading_potential_is_bounded_under_a_sawtooth():
     assert total >= -math.pi - 1e-6
 
 
+def test_v11_deviation_corridor_leaves_room_to_walk_around_an_obstacle():
+    """The penalty dead band must be wide enough for a detour (1.5 m), not 0.5 m."""
+    from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import B2WRewardsCfg
+    from isaaclab_nav_task.navigation.mdp.rewards import path_deviation_penalty
+
+    cfg = B2WRewardsCfg()
+    assert cfg.path_deviation_penalty.params["corridor_radius"] == 1.5
+
+    class _Goal:
+        def __init__(self, d):
+            self.d = d
+
+        def get_path_metrics(self):
+            return torch.tensor([self.d]), None
+
+        def get_relax_at_nearest(self):
+            return torch.zeros(1, dtype=torch.bool)
+
+    env = SimpleNamespace(command_manager=SimpleNamespace(get_term=lambda name: _Goal(1.0)))
+    assert float(path_deviation_penalty(env, corridor_radius=1.5, cap=2.0)) == 0.0
+    env.command_manager = SimpleNamespace(get_term=lambda name: _Goal(2.5))
+    assert float(path_deviation_penalty(env, corridor_radius=1.5, cap=2.0)) == pytest.approx(1.0)
+
+
 def test_v11_timeout_penalty_is_what_the_budget_says():
     """Every reward term is multiplied by dt, so a -50 weight paid -10: the budget assumed -50."""
     from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import B2WRewardsCfg

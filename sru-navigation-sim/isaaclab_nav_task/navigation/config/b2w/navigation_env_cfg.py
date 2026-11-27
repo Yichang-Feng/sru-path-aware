@@ -39,7 +39,7 @@ class B2WRewardsCfg(RewardsCfg):
       progress (direct)   : 0.15 per metre of straight-line gain          ~+2.5
       heading_progress    : 1.0 per radian turned towards the path tangent ~+3 on a 180 deg start
       goal_reached_bonus  : +25 one-shot on completing the 1.5 s dwell     +25
-      path_deviation      : -0.15 per metre beyond a 0.5 m corridor        ~0 when on path
+      path_deviation      : -0.15 per metre beyond a 1.5 m corridor        ~0 when within 1.5 m
       velocity_at_goal    : -0.2 x speed inside 0.5 m                      -(arrive slowly)
       time_out            : -50 on a true 90 s horizon timeout
 
@@ -62,8 +62,13 @@ class B2WRewardsCfg(RewardsCfg):
     )
     path_deviation_penalty = RewTerm(
         func=mdp.path_deviation_penalty,
+        # 1.5 m, not 0.5: a 0.5 m corridor leaves no room to walk around a newly appeared obstacle
+        # (the body is 0.52 m wide and an unseen box can be wider). The corridor is the *penalty*
+        # dead band - "strict on the line" is enforced by the payment gate (0.8 m) and by the path
+        # progress term, not by punishing lateral freedom. Cap 2.0 keeps a gradient all the way out
+        # to 3.5 m so gross shortcuts still cost something.
         weight=-0.15,
-        params={"command_name": "robot_goal", "corridor_radius": 0.5, "cap": 1.5},
+        params={"command_name": "robot_goal", "corridor_radius": 1.5, "cap": 2.0},
     )
 
     # --- goal ---

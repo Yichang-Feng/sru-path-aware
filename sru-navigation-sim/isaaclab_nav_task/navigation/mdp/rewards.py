@@ -154,6 +154,12 @@ def path_deviation_penalty(
     clamped at `cap` metres of excess, so a large shortcut is not punished without bound. Segments
     whose neighbourhood is relaxed (`MultiPath.relax_mask`) are exempt: there the path itself is
     blocked or passes a new obstacle, so leaving it is the *correct* behaviour.
+
+    The corridor is set wide (1.5 m in the B2W task) on purpose: it is a "do not wander" guard, not
+    the mechanism that keeps the robot on the line. That job belongs to `progress_along_path`'s
+    payment gate - staying near the path is what earns money - which is also why a *positive*
+    "closeness to the path" reward is not needed here and would be a state-occupancy term (paying
+    for standing still on the path), the same shape as the goal hotel this task just removed.
     """
     goal_cmd: RobotNavigationGoalCommand = env.command_manager.get_term(command_name)
     distance, _ = goal_cmd.get_path_metrics()
