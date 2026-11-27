@@ -1,5 +1,14 @@
 # Phase 0 阻塞性实测 + 实施报告（B2W path-aware v2）
 
+> **⚠️ 2026-11-27：本文记录的是 v1.0 的实施与验收**。§1–§2 的实测（M1–M5）仍然有效；
+> §3 的奖励表、§5.2 的基线数字、§6 的监控面板已被后续版本改写：
+> - 奖励表：`reach_goal*` 三项在 v1.1 清零，`velocity_at_goal` / `heading_progress_to_path` 新增，超时权重改为 −250
+>   （当前值见 `docs/specs/agent_doing.md` 附录 A.0）
+> - 基线：验收基线改为**驻留口径 SR 0.480**（`docs/evals/phase0_baseline_60s_dwell.md`），不是本文的 0.580
+> - §6 面板里的 `invalid_seg_frac 5–10%` 是错的：楼梯踏面缺失导致的假 invalid 已修，正常值见 `docs/reports/v1p1_p0_diagnosis.md` §D3
+> - 监控面板请用 `skills/sru-training-analysis/`（四条不变量 + 每回合收入换算）
+
+
 对应规格：`docs/specs/agent_doing.md`（Stage 0 → Stage F）。本文件只记录**实测数据、做出的取舍、验证结果**；
 规格本身的冻结参数表仍是唯一真值来源。
 
@@ -225,7 +234,7 @@ cd IsaacLab && PYTHONPATH=/home/yichangfeng/sru-path-aware/sru-navigation-learni
   --task Isaac-Nav-MDPO-B2W-Play-v0 \
   --checkpoint /home/yichangfeng/sru-path-aware/IsaacLab/logs/rsl_rl/b2w_navigation_mdpo/2026-11-24_09-05-54_b2w_sigma_bounded/model_6000.pt \
   --episodes 200 --episode_length_s 60 --num_envs 20 --legacy_env \
-  --out ../docs/evals/phase0_baseline_60s.md --headless
+  --out ../docs/evals/phase0_baseline_60s_dwell.md --headless
 ```
 
 > `SR(old rule)`（曾进入 0.5 m）与 `SR`（连续驻留）并列给出，两者的差值就是"碰边锁存"灌进 SR 的水分。
@@ -234,7 +243,7 @@ cd IsaacLab && PYTHONPATH=/home/yichangfeng/sru-path-aware/sru-navigation-learni
 
 - 代码：Stage A–F 已实现并提交；17 项单元测试全绿；10 iter 全量冒烟 **exit 0**。
 - 基线重评：60 s 与 90 s 两档各 200 局已完成（见 §5.2），交付报告
-  `docs/evals/phase0_baseline_60s.md` / `docs/evals/phase0_baseline_90s.md`。
+  `docs/evals/phase0_baseline_60s_dwell.md`（锁存口径的两份已归档到 `docs/archive/`）。
 - **待办**：Stage G 的 4000 iter 全量训练（数天），未启动；见 §7、§8。
 
 ---

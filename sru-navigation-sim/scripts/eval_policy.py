@@ -9,7 +9,7 @@ with now, bucketed by terrain type, so before/after comparisons are apples to ap
 
 Usage:
     python scripts/eval_policy.py --task Isaac-Nav-MDPO-B2W-Play-v0 \
-        --checkpoint <path/to/model_6000.pt> --episodes 200 --out docs/evals/phase0_baseline_60s.md \
+        --checkpoint <path/to/model_6000.pt> --episodes 200 --out docs/evals/phase0_baseline_60s_dwell.md \
         [--episode_length_s 90] [--policy_idx 1]
 
 Outputs a markdown table plus a JSON blob with the raw per-episode records.

@@ -1,5 +1,11 @@
 # b2w_pathfix_v1 训练诊断报告
 
+> **已归档 2026-11-27**。这份 v1 诊断由另一个模型给出，其结论已由 `docs/reports/b2w_pathfix_v1_final_report.md` 逐条复核：
+> 主因（目标旅馆）成立；但 **B1（重采样弦是 invalid 主因）、B3（`strict_success` 默认 False）、§0（GitHub main 不是训练代码）三条被证伪**，
+> 它提出的 P1 也经过改写后才实施（见 `docs/specs/v1p1_next_plan.md` §0）。
+> 保留原因：独立交叉验证的记录，以及 v1.1 提案的原始出处。
+
+
 > 数据截至 **iter 3230 / 2026-11-26 08:42 CST**，训练仍在进行（4000 iter，约 3 h 后结束）。
 > 数据源：`IsaacLab/logs/rsl_rl/b2w_navigation_mdpo/2026-11-25_19-40-08_b2w_pathfix_v1/events.out.tfevents.*`（44 个标量 × 3230 点）。
 > 本文所有数字均可由第 9 节命令复现；派生量的公式在第 3 节给出，请勿脱离口径直接引用。

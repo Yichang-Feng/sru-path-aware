@@ -1,5 +1,9 @@
 # Phase 0 基线重评
 
+> **已归档 2026-11-27**。锁存口径（"曾进入 0.5 m"）的 90 s 基线，已被驻留口径取代；且同样受 `eval_policy.py` 的 off-by-one 影响。
+> 见 `docs/reports/b2w_pathfix_v1_final_report.md` §6。
+
+
 - checkpoint: `model_6000.pt`
 - horizon: 90 s,  episodes: 200,  actor: 1
 

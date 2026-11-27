@@ -654,6 +654,23 @@ Stage G（4000 iter 全量）→ 1500 中期 / 4000 验收
 
 # 附录 A：V1.1 当前系统全貌（2026-11-26）
 
+> ## ⚠️ A.0 v1.2 增量（2026-11-27）——本节优先于下面所有小节
+>
+> 附录 A 正文写的是 **v1.1**（commit `31540fa`）。此后又改了三处，正文对应小节随之过期：
+>
+> | 项 | A 正文（v1.1） | **当前（v1.2）** | 影响的小节 |
+> |---|---|---|---|
+> | 观测维度 | 2699 / 5836（+2 维朝向误差） | **2697 / 5834**（+2 已撤销：路径点已含方向信息，显式角度在部署时不可靠） | A.3、A.4、A.12 |
+> | `heading_progress_to_path` | `clamp(prev-err)`，实测可达 15.4/回合 | **有界积分器**：`ref = clamp(ref-delta, 0, π)`，整回合 ≤ π | A.5、A.6、A.9 |
+> | `time_out_penalty` | 权重 −50（实付 **−10**） | 权重 **−250**（实付 −50）；`episode_terminated` 类一次性项都受 `×dt` 影响 | A.6 |
+> | `path_deviation_penalty` | 走廊 0.5 m / cap 1.5 | **走廊 1.5 m / cap 2.0**（0.5 m 不够绕过新出现的障碍） | A.6、A.8 |
+> | PRM free mask | `ground ∪ platform` | **`[GROUND_MIN, PLATFORM_MAX]`**（楼梯踏面原本被当障碍） | §2.2、A.8 |
+>
+> 训练结果：v1.1（`b2w_pathfix_v1p1`）SR 0.10、v1.2（`b2w_pathfix_v1p2`）早期读数见
+> `docs/reports/v1p1_training_analysis_2026-11-27.md` 与 `docs/reports/v1p2_early_analysis_2026-11-27.md`。
+> 分析工具与判据：`skills/sru-training-analysis/`（会按 run 自己的 `params/env.yaml` 换算，并检查四条不变量）。
+
+
 > **性质**：本附录是 v1.0 冻结正文的**增量修订**。凡与正文冲突，以本附录为准，具体是：
 > §2.5 奖励表、§2.7 观测维度、§2.8 训练配置、以及 §2.2 可行性判据里的 free mask 定义。
 > 其余章节（路径管线算法、三档门、进度记账、Stage 划分）保持不变。

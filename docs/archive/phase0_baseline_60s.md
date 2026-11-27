@@ -1,5 +1,9 @@
 # Phase 0 基线重评
 
+> **已归档 2026-11-27**。锁存口径（"曾进入 0.5 m"）的基线重评，已被 `docs/evals/phase0_baseline_60s_dwell.md`（驻留口径，SR 0.480）取代。
+> 当时 `eval_policy.py` 的"提前结束"判定有 off-by-one，导致 SR 退化回锁存口径，见 `docs/reports/b2w_pathfix_v1_final_report.md` §6。
+
+
 - checkpoint: `model_6000.pt`
 - horizon: 60 s,  episodes: 200,  actor: 1
 
