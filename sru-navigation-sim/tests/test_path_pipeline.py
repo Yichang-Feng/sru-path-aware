@@ -482,12 +482,13 @@ def test_reward_economics_moving_beats_standing():
     dt = 0.2
     weights = {name: term.weight for name, term in cfg.__dict__.items() if hasattr(term, "weight")}
 
+    # The weight is pre-divided by dt: every term is multiplied by dt again, so -250 pays -50.
     standing = weights["time_out_penalty"] * dt  # timeout on the horizon, nothing else happens
     path_reward = weights["progress_along_path"] * 25.0  # per_metre=True: weight * metres
     direct_reward = weights["progress"] * 20.0
     completing = path_reward + weights["goal_reached_bonus"] + weights["reach_goal"] * dt * 8 + direct_reward
 
-    assert standing == pytest.approx(-10.0)
+    assert standing == pytest.approx(-50.0), "a horizon timeout must cost the configured -50, not -10"
     assert completing > 50.0, completing
     assert path_reward > 5.0 * direct_reward, "the path term must dominate the direct-goal term"
 
@@ -597,7 +598,11 @@ def test_b2w_and_go2w_get_identical_v2_layers():
         assert weights["progress"] == pytest.approx(0.15)
         assert weights["goal_reached_bonus"] == pytest.approx(25.0)
         assert weights["path_deviation_penalty"] == pytest.approx(-0.15)
-        assert weights["time_out_penalty"] == pytest.approx(-50.0)
+        # -250, not -50: the reward manager multiplies every term by dt (0.2), so -250 * 0.2 = -50.
+        assert weights["time_out_penalty"] == pytest.approx(-250.0)
+        assert weights["time_out_penalty"] * 0.2 == pytest.approx(-50.0)
+        assert weights["heading_progress_to_path"] == pytest.approx(1.0)
+        assert weights["velocity_at_goal"] == pytest.approx(-0.2)
 
         # `joint_acc_l2_joint` is inherited from the shared base `RewardsCfg`, whose regexes are the
         # AoW-D ones; every task that adopts the path-aware reward set must re-point them, otherwise
@@ -825,20 +830,36 @@ def test_v11_heading_potential_has_no_spike_at_a_corner():
     assert step_reward <= 0.2 + 1e-6, f"corner produced a spike of {step_reward:.3f}"
 
 
-def test_v11_heading_error_observation_uses_the_lookahead_point():
-    """U7 - sample 0 of the local path sits on the robot (degenerate); the bearing must come from
-    the last sample."""
+def test_v11_heading_potential_is_bounded_under_a_sawtooth():
+    """The error jumping up and then recovering slowly must not be a farm.
+
+    The v1.1 run earned 15.4/episode from this term against a theoretical bound of pi, because the
+    old version clamped `prev - err` and re-anchored `prev := err`: a big *rise* cost one clamped
+    step while the recovery was paid in full. The reference now only moves by what was actually
+    paid, so the episode total is `ref_0 - ref_T` with `ref` clamped to [0, pi].
+    """
     import math
 
-    from isaaclab_nav_task.navigation.mdp.observations import path_heading_error
+    env, goal, reward_fn = heading_env()
+    reward_fn(env)  # seed
+    total = 0.0
+    for _ in range(10):
+        goal.direction = (math.cos(1.4), math.sin(1.4))  # the error jumps up by ~1.3 in one step
+        total += float(reward_fn(env)) * 0.2
+        for k in range(13):  # ... and recovers slowly
+            angle = 1.4 - 0.1 * (k + 1)
+            goal.direction = (math.cos(angle), math.sin(angle))
+            total += float(reward_fn(env)) * 0.2
+    assert total <= math.pi + 1e-6, f"sawtooth earned {total:.2f} rad, must stay within pi"
+    assert total >= -math.pi - 1e-6
 
-    goal = FakePathGoal(direction=(0.0, 1.0))
-    env = dwell_env(5.0, goal)
-    env.episode_length_buf = torch.tensor([10], dtype=torch.long)
-    obs = path_heading_error(env)
-    assert obs.shape == (1, 2)
-    assert float(obs[0, 0]) == pytest.approx(math.cos(math.pi / 2), abs=1e-5)
-    assert float(obs[0, 1]) == pytest.approx(1.0, abs=1e-5)
+
+def test_v11_timeout_penalty_is_what_the_budget_says():
+    """Every reward term is multiplied by dt, so a -50 weight paid -10: the budget assumed -50."""
+    from isaaclab_nav_task.navigation.config.b2w.navigation_env_cfg import B2WRewardsCfg
+
+    cfg = B2WRewardsCfg()
+    assert cfg.time_out_penalty.weight * 0.2 == pytest.approx(-50.0)
 
 
 def test_v11_log_std_schedule_reaches_the_final_wall_by_3600():

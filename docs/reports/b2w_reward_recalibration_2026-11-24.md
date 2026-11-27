@@ -5,7 +5,7 @@
 - **配置**：MDPO / 1046 env / seed 60 / `Isaac-Nav-MDPO-B2W-v0`
 - **截至本文**：3080 / 15000 iter，14.0 小时（仍在运行）
 - **对照 run**：`2026-11-23_17-05-55_official_b2w_mdpo_1046`（官方 reward + `time_out_penalty=-30`）
-- **诊断依据**：`docs/b2w_timeout_penalty_analysis_2026-11-23.md`
+- **诊断依据**：`docs/reports/b2w_timeout_penalty_analysis_2026-11-23.md`
 
 ---
 

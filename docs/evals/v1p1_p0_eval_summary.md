@@ -1,4 +1,4 @@
-# P0 诊断（eval dump: docs/v1p1_p0_eval.json）
+# P0 诊断（eval dump: docs/evals/v1p1_p0_eval.json）
 
 - 局数 200；结局分布 {'fall': 43, 'complete': 22, 'timeout': 135}
 

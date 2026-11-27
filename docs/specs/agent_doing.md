@@ -193,7 +193,7 @@ def get_path_metrics(self):
 - `--policy_idx {1,2}`：分别加载双策略（训练日志是两者混合，play 只用 1）
 - `--ablate_path`：`target_path` 观测置零，测动作 L2 变化量（路径反事实测试）
 
-**产出**：`docs/phase0_baseline_report.md`
+**产出**：`docs/reports/phase0_baseline_report.md`
 
 ---
 
@@ -650,3 +650,326 @@ Stage G（4000 iter 全量）→ 1500 中期 / 4000 验收
 | 评测协议 | 2 m 穿墙噪声作 **OOD 压力测试**（记录，不作训练目标）；窄门通过率、门前徘徊时长为主指标 |
 | 治本项 | TanhNormal + 雅可比修正，替换移动墙调度 |
 | ⛔ 不做 | 全局乱噪、穿墙航点主分布、地形课程（除非 Stage 0 确认接线存在） |
+---
+
+# 附录 A：V1.1 当前系统全貌（2026-11-26）
+
+> **性质**：本附录是 v1.0 冻结正文的**增量修订**。凡与正文冲突，以本附录为准，具体是：
+> §2.5 奖励表、§2.7 观测维度、§2.8 训练配置、以及 §2.2 可行性判据里的 free mask 定义。
+> 其余章节（路径管线算法、三档门、进度记账、Stage 划分）保持不变。
+>
+> 依据：`docs/reports/b2w_pathfix_v1_final_report.md`（v1 全量分析）、
+> `docs/reports/v1p1_p0_diagnosis.md`（P0 诊断 D1–D8）、`docs/specs/v1p1_next_plan.md`（裁决）。
+> 代码基线：commit `31540fa`（v1.1 P1 全部补丁）。
+
+---
+
+## A.1 训练怎么跑
+
+```bash
+# 全量（当前正在跑的那个）
+./train_b2w_pathaware.sh --task Isaac-Nav-MDPO-B2W-v0 --num_envs 1046 \
+  --max_iterations 4000 --seed 60 --run_name b2w_pathfix_v1p1 --headless --no_debug_vis
+
+# 冒烟（改任何东西之后先跑这个）
+./train_b2w_pathaware.sh --task Isaac-Nav-MDPO-B2W-v0 --num_envs 32 --max_iterations 10 \
+  --headless --no_debug_vis
+```
+
+- **从头训练，禁止 resume**：v1.1 改了奖励语义**和**观测维度（2697→2699），旧 value function 与旧 actor
+  维度都对不上，resume 只会把偏见带进来。
+- 启动器负责三件事：解析 python 解释器（conda 或 venv 都行）、把本工作区的
+  `sru-navigation-learning` / `sru-navigation-sim` **前置到 PYTHONPATH**（否则 `import rsl_rl` 会解析到
+  `~/sru-path-aware-official` 那份旧代码）、然后把参数透传给 `isaaclab.sh -p scripts/train.py`。
+- 日志：`IsaacLab/logs/rsl_rl/b2w_navigation_mdpo/<时间戳>_<run_name>/`（TensorBoard `events.*` +
+  `params/agent.yaml` + `params/env.yaml`），同时写 wandb 项目 `isaaclab_nav_b2w`。
+- `--no_debug_vis` 必须开：命令项的调试图元是每个 env 每段路径一个 cuboid（1046×14 ≈ 1.5 万个），
+  而且原型 USD 要连 Nucleus，本机连不上会卡在 300 s 超时。
+
+## A.2 时间与规模
+
+| 量 | 值 | 说明 |
+|---|---|---|
+| 物理步长 | 0.005 s | sim dt |
+| 低层 decimation | 4 | 低层 locomotion 50 Hz |
+| **策略步长 `dt`** | **0.2 s** | 0.005 × 40（高层 decimation） |
+| episode 长度 | **90 s = 450 步** | 训练；Play/评测 60 s（与历史基线可比） |
+| 并行 env | **1046** | 单个 RTX 4090，约 13.6 GB 显存；**不能并发第二个 sim** |
+| `num_steps_per_env` | 16 | 每 iter 每 env 采 16 步 → **16 736 条/iter** |
+| 吞吐 | ≈ 970–1220 fps | 实测 **17.3 s/iter**（v1 是 13.7 s，多了 2 维观测） |
+| 4000 iter | ≈ 16–19 h | 1000 iter ≈ 4–5 h |
+
+> **所有 `Episode_Reward/*` 日志 = 每回合该项总和 ÷ 90**（`max_episode_length_s`），所以
+> **每回合总量 = 日志值 × 90**；而奖励管理器对每一项都乘 `dt = 0.2`，所以
+> **每步实际回报 = weight × 原始值 × 0.2**。这两个换算在全文反复用到。
+
+## A.3 观测与维度（v1.1）
+
+### A.3.1 policy 组 —— **2699 维**
+
+| # | 名称 | 维度 | 说明 |
+|---|---|---:|---|
+| 0 | `base_lin_vel` | 3 | 机体系线速度 |
+| 1 | `base_ang_vel` | 3 | 机体系角速度 |
+| 2 | `projected_gravity` | 3 | 姿态 |
+| 3 | `last_action` | 3 | 上一步的 `[vx, vy, ω]` 指令 |
+| 4 | `target_position` | 4 | 目标在机体系的方向(3) + log 距离(1) |
+| 5 | **`path_heading_error`** | **2** | ★ v1.1 新增：`[cos Δψ, sin Δψ]`，到路径 1.5 m 前视点的方位角 |
+| 6 | `distance_to_path` | 1 | 到规划路径的横向距离（米） |
+| 7 | `target_path` | 60 | 全局路径 15 点 × (dir_xyz, log 距离) |
+| 8 | `target_path_local` | 60 | 6 m 前视局部路径 15 点 × 4 |
+| 9 | `depth_image` | 2560 | 深度图经预训练 VAE 编码成 64×5×8 的潜特征 |
+
+**proprio 合计 = 3+3+3+3+4+2+1 = 19 维**；path 块 = 120 维；image = 2560 维。
+
+### A.3.2 critic 组 —— **5836 维**
+
+在 policy 之外再加 `time_normalized` (1) 与 `height_scan_critic` (3136 = 64×7×7 的高度图 VAE 潜特征)。
+
+### A.3.3 顺序是硬约束（⚠️ 改观测必须遵守）
+
+网络按**位置**切片，不按名字：
+
+```
+actor : [ proprio | path(120) | image(2560) ]
+critic: [ proprio | path(120) | time(1) | height(3136) | image(2560) ]
+```
+
+所以任何新的 proprioceptive 项必须插在 `target_path` **之前**，任何扩展路径的项必须紧跟 `target_path`。
+`config/path_aware.py::insert_obs_terms` 就是干这个的（以 `target_path` 为锚点插入，且幂等）。
+`path_heading_error` 就是插在 `distance_to_path` 之前。
+
+> 历史教训：早期版本把新项直接 append，结果落到了 `depth_image` 之后，proprio/path/image 的切片全部错位。
+
+## A.4 网络结构（ActorCriticSRU）
+
+```
+actor
+  depth(64×5×8) ──┐
+                  ├─ self-attn → cross-attn(proprio) → 64 维图像特征
+  proprio(19) ────┘
+        │
+        └→ concat(64 + 19 = 83) → SRU / LSTM 记忆（hidden 512, 1 层）
+                                        │
+  path(120) → 15×4 → self-attn → cross-attn → path_embed(32)   ← **不过 RNN**
+                                        │
+                                concat(512 + 32 = 544) → MLP[512,256,128] → 3 维动作 [vx, vy, ω]
+```
+
+- 动作维度 3，经动作项 `PerceptiveNavigationSE2Action` 处理：`tanh → ×policy_scaling[1.5,1.0,1.0]
+  → 低通滤波（α 随 episode 进度变化）→` 作为速度指令送给低层 locomotion 策略
+  （B2W 用 `policy_b2w_new_2.pt`，观测组 `low_level_policy`）。
+- **路径不过 RNN，只在 MLP 前拼接**：这意味着路径的时间上下文只能靠观测窗口堆叠，
+  这也是为什么 `path_heading_error` 这种"已经算好的误差量"直接喂进去价值很大。
+- critic 结构相同，另外多一路 height scan 的 attention 编码与 time embedding。
+
+## A.5 算法与超参（MDPO）
+
+**MDPO = 双 ActorCriticSRU + 互相蒸馏**：两个 actor 各自用自己的 storage 做 PPO，再加一项
+`distill_coef = 0.02` 的互相 KL，防止两者过早分叉。评测时只跑 actor 1（`--policy_idx`）。
+
+| 项 | 值 |
+|---|---|
+| `num_steps_per_env` / `num_learning_epochs` / `num_mini_batches` | 16 / 5 / 4 |
+| `gamma` / `lam` | 0.999 / 0.95 |
+| `clip_param` / `value_clip_param` / `max_grad_norm` | 0.2 / 0.2 / 1.0 |
+| `value_loss_coef` / `distill_coef` | 0.02 / 0.02 |
+| `reward_shifting_value` | 0.05（MDPO 训练时奖励整体平移，只为数值稳定，记录时会减回去） |
+| 学习率 | 1e-3 → **1e-4 地板**，cosine（⛔ 不能用 `schedule="adaptive"`，MDPO 未实现，会静默冻结 LR） |
+| 熵系数 | 1e-3 → 0，cosine，**hold 400 iter，再用 2600 iter 退火** |
+| **σ 上墙日程** | `log_std_max`：0.1 → −0.6（600–2200）→ −1.0（2200–3600），cosine 分段 |
+| `log_std_min` | −2.5（下界不动） |
+| 观测归一化 | 无（`empirical_normalization=False`） |
+
+> **为什么要"移动的墙"**：`log_std` 是被 `clamp` 住的，一旦参数贴在墙上，梯度就是 0，永远不会自己降下来
+> （v1 run 里 `raw_log_std_mean` 从 iter 500 起恒等于墙值 0.1035）。只把墙往下挪，才能逼优化器继续压噪声。
+> v1.1 把日程压进 4000 iter 内（原来 1000/5000/8000，跑完 4000 轮时 σ 还是 0.61，等于从没进过低噪声区）。
+
+## A.6 奖励表（v1.1，共 16 项）
+
+> 每条都乘 `dt = 0.2`。下表"每步"指**实际到账**的值。
+
+| # | 项 | 权重 | 每步 / 每局 | 语义 |
+|---|---|---:|---|---|
+| 7 | `progress_along_path` | **1.2** | **1.2 × 新增米数**（≈0.19/步 @0.8 m/s） | **主收入**：沿规划路径的付费进度（米数制、棘轮、三档门） |
+| 10 | `progress` | 0.15 | 0.15 × 向目标投影的米数（≈0.024/步） | 直连目标的弱塑形，防"路径断了就完全没方向" |
+| 14 | **`heading_progress_to_path`** | **1.0** | 1.0 × 减少的朝向误差(rad)，单步钳 ±0.2 → **≤0.2/步** | ★新增：朝向路径切线的**势函数** |
+| 12 | `goal_reached_bonus` | 25.0 | **+25 一次性** | 完成 1.5 s 连续驻留的那一刻 |
+| 13 | **`velocity_at_goal`** | **−0.2** | −0.2×(‖v‖+0.5‖ω‖)×0.2 ≈ **−0.04×速度** | ★新增：圈内**只扣不给**，逼它减速 |
+| 9 | `path_deviation_penalty` | −0.15 | −0.15 × 超出 0.5 m 走廊的米数（封顶 1.5 m）× 0.2 | 偏离走廊的惩罚；relax 段豁免 |
+| 5 | `reach_goal_xy_soft` | **0.0** | 0 | ⛔ v1.1 清零 |
+| 6 | `reach_goal_xy_tight` | **0.0** | 0 | ⛔ v1.1 清零 |
+| 11 | `reach_goal` | **0.0** | 0 | ⛔ v1.1 清零 |
+| 8 | `backward_movement_penalty` | −0.0 | 0 | 保持关闭（启用会封死死胡同脱困与窄处微调） |
+| 3 | `action_rate_l1` | −0.02 | −0.02 × mean\|Δa\| × 0.2 | 动作平滑 |
+| 1 | `lateral_movement` | −0.02 | −0.02 × \|v_y\| × 0.2 | 抑制横移 |
+| 2 | `rot_movement` | −1e-05 | 极小 | 抑制原地打转（数值上几乎可忽略） |
+| 0 | `joint_acc_l2_joint` | −1e-07 | 极小 | 关节二阶平滑 |
+| 4 | `episode_termination` | −50.0 | **−10/回合** | 任何原因终止都扣 |
+| 15 | `time_out_penalty` | −50.0 | **−10/超时回合** | 90 s 跑满 |
+
+**一局的收支（20 m 路径，理想情况）**
+
+| 行为 | 回报 |
+|---|---|
+| 沿路径走完 + 慢速驻留完成 | +24（路径）+ 25（完成）− 10（终止）≈ **+39** |
+| 走完但不完成、绕到超时 | +24 − 10 − 10 ≈ **+4**，且在圈内每分钟都被 `velocity_at_goal` 扣 |
+| 全程站在起点 | −10（超时）− 10（终止）≈ **−20** |
+| 转身对准路径（180°） | +3.14（朝向势函数全额定金）|
+
+## A.7 终止与成功口径（v1.1）
+
+| 终止项 | 触发条件 | 记成功？ |
+|---|---|---|
+| `early_termination`（= `at_goal_navigation`） | 在 0.5 m 圈内**连续 8 步**（1.5 s），出圈即清零 | **是**（唯一成功） |
+| `time_out` | `episode_length_buf ≥ 450` | **恒否**（v1.1 改） |
+| `base_contact` | 机身/髋/大腿接触力 > 1.0 | 否 |
+| `large_pitch_angle` | 俯仰 > 40° | 否 |
+| `terrain_fall` | 掉到 −2 m 以下 | 否 |
+
+- v1.0 的"超时那一步刚好在圈内就算成功"已删掉：连续驻留规则下，完成一定会先一步终止回合，
+  所以**任何超时都是失败**。同时新增指标 `Metrics/robot_goal/in_goal_at_timeout`
+  记录"超时那一刻恰好在圈内"的比例——那是旅馆行为的直接指纹（v1 里约 0.3）。
+- 成功率的权威口径是 `eval_policy.py`（Play 协议，无观测噪声、无外力）：
+  `completed_dwell = 结束早于 horizon 且最长驻留连击 ≥ required-1`（最后一步被 reset 吞掉）。
+
+## A.8 路径管线当前参数
+
+| 参数 | 值 | 位置 |
+|---|---|---|
+| 采样点数（稀疏/密集） | 15 / 64 | `GlobalPathConfig` |
+| 类别权重 | optimal 0.45 / mildly 0.25 / highly 0.20 / infeasible 0.10 | `path_aware.DEFAULT_PATH_CATEGORY_WEIGHTS` |
+| 机体半径判据 `seg_padding_m` | **0.31 m** | 实测整机半宽 0.26 + 0.05 |
+| pinch 阈值 | 0.45 m | 小于此值视为窄门/窄道 |
+| 航点噪声 | ≤ min(0.35 m, 0.5×clearance)，pinch 段不加噪 | |
+| 三档支付门 | 正常 0.8 / relax 1.2 / 不可行 max(1.6, push+0.6) | `_compute_gates` |
+| 挡路事件概率 | 0.15 → 0.30（2000 iter ramp） | |
+| 进度记账 | `SYNC_RATE 1.0 m/步`、`CONT_TOL 0.5`、`PAY_CAP 1.5`、`EPS 0.04` | `path_generator.py` |
+| 前视 | 局部路径 6 m；朝向 1.5 m | `LOCAL_PATH_HORIZON_M` / `HEADING_LOOKAHEAD_M` |
+| **free mask** | `[GROUND_MIN, PLATFORM_MAX]` = 0–205 单位 | ⚠️ v1.1 修正（见 A.9.5） |
+
+## A.9 新增机制详解（v1.1 相对 v1.0）
+
+### A.9.1 关掉"目标旅馆"：三项接近奖励权重 → 0
+
+**问题**：v1 里 `reach_goal`(2.0) + `tight`(0.75) + `soft`(0.25) 只在 0.5 m 圈内支付，
+合计 **0.84/步**；而完成驻留只给 +25 并把回合**终止**。对一条能跑 450 步的回合来说，
+"待在圈里刷 0.84/步"永远优于"+25 后结束"——实测每回合圈内收入 34.2，完成奖励只有 5.4，
+200 局里有 53 局的最长连击正好停在 **7 步**（差一步，主动不完成）。
+
+**为什么不加速度门**：速度门只是把"绕圈"变成"慢速绕圈"，慢速仍在圈内、仍拿 0.84/步，
+要避免完成还得每 7 步出圈一次，摊薄后仍有 ~0.58/步——旅馆容量仍是完成奖励的 8 倍。
+**唯一可靠的做法是不给**：`weight=0` 时 `RewardManager` 直接 `continue`，连计算都跳过（零开销）。
+
+**替代的引导**：
+- 想"进圈"的塑形由 `progress_along_path` 提供——端点锁定保证路径最后一点就是目标，进度一路付到脚下；
+- 想"减速"由 `velocity_at_goal`(−0.2) 提供：圈内**只扣不给**，逼近 0 速度才不挨罚；
+- 想"完成"由 +25 提供。
+
+### A.9.2 朝向势函数 `heading_progress_to_path`（新增项，权重 1.0）
+
+```python
+p     = get_path_local(1.5)[:, -1, :2]        # 1.5 m 前视点（末点；第 0 点在机器人身上，方向退化）
+err   = atan2(p_y, p_x).abs()                  # [0, π]，机体系
+delta = clamp(prev_err - err, -0.2, +0.2)      # 单步最多 0.2 rad
+r     = fade(dist_to_goal) * delta / dt        # 再 ×dt 后 = fade × delta
+```
+
+四条性质（都是刻意的）：
+
+1. **是势函数，不是状态占用**：整局总额 = `err_start − err_end`，有界（≤π）；来回摆头每步 ±0.2 互相抵消，
+   净收益 0。这直接对应 v1 的教训——**任何"在某区域每步给钱"的正项都会被刷**。
+2. **量级对上**：ω 上限 1.0 rad/s → 每步 0.2 rad → **0.2/步**，与沿路径行驶的 0.19/步同量级。
+   180° 转身共带来 **+3.14**，且立刻到账（不是等转完才给）。
+3. **单步钳位 = 拐角不尖峰**：90° 急转弯时"胡萝卜"会突跳，不钳位的话势函数会一次性支付整个跳跃；
+   钳到 0.2 rad 后，单步上限就是 0.2，与正常转弯无异（单测 U6b 专门断言这一点）。
+4. **目标 1 m 内淡出**：终端行为交给驻留判定与 `velocity_at_goal`，朝向项在那里没有意义。
+
+**为什么必须用 1.5 m 前视**：路径首点就在机器人身上，方向向量退化为 0；用瞬时切向又会在噪声里抖。
+1.5 m ≈ 0.8 m/s 下 1.8 s 的提前量，既给足拐弯预判，门洞里又仍落在门内。
+
+### A.9.3 朝向误差观测 `path_heading_error`（+2 维）
+
+`[cos Δψ, sin Δψ]`，与 A.9.2 用的是同一个前视点。理由是**路径块不过 RNN**：策略原本只能从
+`target_path_local`（15 点 × 4 维）里自己解算方位，现在直接把误差量喂进去（Go2W 的
+`target_heading_delayed` 用的是同一套 cos/sin 范式）。
+
+**维度影响**：policy 2697 → **2699**，critic 5834 → **5836**；proprio 17 → 19（actor 与 critic 必须相等，
+网络里有断言）。导出器（JIT/ONNX × Single/Dual）的维度全部由 `num_actor_obs` 推导，无需硬编码修改，
+但导出后必须跑一遍数值一致性单测。
+
+### A.9.4 超时成功口径归零
+
+v1 的 `strict_success=True` 仍然奖励"超时那一步刚好在 0.5 m 内"——绕圈的机器人约 1/3 的时间在圈里，
+于是超时也有 ~1/3 概率白拿成功。v1.1 直接恒记 0，并把这件事降级成一个**指标**
+（`in_goal_at_timeout`），因为它本身是有价值的旅馆指纹。
+
+### A.9.5 free mask 修正（楼梯）
+
+**根因**：`Prm.compute_free_mask` 原来只把 `ground(0–10) ∪ platform(195–205)` 当自由格。
+楼梯踏面在 **40 / 80 / 120 / 160** 单位，**整段楼梯既不是地面也不是平台**，于是被当成障碍：
+clearance 由 free mask 算出来 → 楼梯上 clearance = 0 → 任何跨楼梯的弦都判"不可通行"，
+支付门随之放宽到 1.6 m——**恰好在最需要严格贴线的地方取消了约束**。
+
+**修法**：`free = (h ≥ GROUND_MIN) & (h ≤ PLATFORM_MAX)`。墙在 300、坑在 <0，仍然被排除。
+
+**效果**：stairs tile 每局 invalid 段 **8.14 → 0.95**；平台/踏面 free 占比 **1.00**；
+invalid 段的最小 clearance 从 0.00 m 回到 0.31 m。
+
+### A.9.6 `relax` 语义修正
+
+```
+v1  : relax = (inv | left | right) & ~pinch     # 不可行段若也在 pinch 内 → 不放宽
+v1.1: relax = inv | ((left | right) & ~pinch)   # 不可行段本身永远放宽
+```
+
+不可行段是**构造上就走不了**（注入的挡路事件、非 LOS 类别、或机体确实过不去的弦），
+在那里离开路径是正确行为，不该被走廊惩罚。pinch 只保护"不可行段的邻居"，
+避免豁免溢到旁边真正要走严格的门框上。
+
+## A.10 与 v1.0 的差异一览
+
+| 项 | v1.0 | **v1.1** |
+|---|---|---|
+| `reach_goal` / `tight` / `soft` | 2.0 / 0.75 / 0.25 | **0 / 0 / 0** |
+| `velocity_at_goal` | 未注册 | **−0.2** |
+| `heading_progress_to_path` | 无 | **1.0（势函数，1.5 m 前视）** |
+| policy / critic 维度 | 2697 / 5834 | **2699 / 5836** |
+| 超时成功 | 当步在圈内算成功 | **恒 0**，另记 `in_goal_at_timeout` |
+| free mask | ground ∪ platform | **`[GROUND_MIN, PLATFORM_MAX]`** |
+| `relax` | 不可行段在 pinch 处不免罚 | **不可行段永远免罚** |
+| σ 墙日程 | 1000 / 5000 / 8000 | **600 / 2200 / 3600** |
+| 熵日程 | hold 500 / span 3500 | **hold 400 / span 2600** |
+
+## A.11 监控面板与闸门
+
+**训练期**（TensorBoard）
+
+| 指标 | 期望 | 异常含义 |
+|---|---|---|
+| `Episode_Reward/reach_goal*` | **恒 0** | 非 0 → 权重没生效 |
+| `Episode_Reward/heading_progress_to_path` | 前 200 轮应为正且逐步收敛到 0 | 长期为负 → 策略在持续背对路径 |
+| `Episode_Reward/goal_reached_bonus × 90 / 25` | 上升 | 不升 → 到不了/停不住 |
+| `Metrics/robot_goal/in_goal_at_timeout` | 下降 | 不降 → 仍在目标附近空转 |
+| `Metrics/robot_goal/success_rate` | 上升 | — |
+| `Episode_Termination/time_out` | < 0.25 | > 0.3 → 回合效率差 |
+| `Policy/log_std_max` | 600/2200/3600 处为 0.1/−0.6/−1.0 | 不动 → 日程没接上 |
+| `Metrics/robot_goal/invalid_seg_frac` | 楼梯 ≈0.07、迷宫/坑洞 ≈0.13 | 楼梯 tile 不再异常偏高（修复前 0.58） |
+
+**1000 轮早期闸门**：条件完成率（完成驻留 / 曾入圈）> 0.4、圈内速度 p50 明显下降、
+120–180° 大角度开局 SR 不再趋近 0。
+
+**最终验收**（`eval_policy.py` × 200 局 × 60 s，同口径）：SR ≥ 0.58、条件完成率 ≥ 0.80、
+圈内速度 p50 ≤ 0.5 m/s、median `d_path` ≤ 0.5 m、timeout ≤ 0.25、目标附近正收入 = 0。
+
+## A.12 已知限制
+
+1. **楼梯攀爬是学出来的动作序列**：开环恒定前向指令 8 s 最多升 0.18 m（一级），但旧策略 stairs SR 0.403
+   说明系统能爬——需要减速/对准/逐级推进，当前靠 `heading_progress_to_path` 只补上"对准"这一段。
+   若 P1 之后 stairs SR 仍 ≈0，下一步是楼梯地形课程，⛔ 不是"楼梯专用奖励"。
+2. **`backward_movement_penalty` 保持关闭**：v1 里有 90% 的回合出现倒走（`reverse_frac` > 5%），
+   但倒走在当前奖励下是合法的替代策略；启用惩罚会顺带封死倒车脱困。
+3. **`invalid_seg_frac` 的口径**：它把"注入的挡路事件"和"非 LOS 类别"（权重合计 0.30）都算进去，
+   所以稳态就是 0.07–0.13，不能再按 v1.0 写的 5–10% 卡。修复后实测：stairs 0.95/14 ≈ 0.07、
+   maze 1.78/14 ≈ 0.13、pits 1.86/14 ≈ 0.13。
+4. **地形课程未接线**，`max_init_terrain_level=10`（全部 6 行难度的 tile 一起采样），没有难度递进。

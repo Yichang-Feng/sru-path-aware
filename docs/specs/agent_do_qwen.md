@@ -2,7 +2,7 @@
 
 > **文档性质**：基于 `b2w_pathfix_v1`（4000 iter，commit `33ae349`）的实测结果与代码核对，供执行 Agent 直接实施。
 > **Agent 职责边界**：按 Stage 顺序**实现**本规格。P0 为**阻塞性诊断**，未出结果不得进入 P1。遇规格内部矛盾请停止并上报证据，⛔ 不得自行重新设计机制。
-> **前置阅读**：`docs/b2w_pathfix_v1_final_report.md`、`docs/phase0_baseline_60s_dwell.md`
+> **前置阅读**：`docs/reports/b2w_pathfix_v1_final_report.md`、`docs/evals/phase0_baseline_60s_dwell.md`
 
 ---
 
@@ -354,7 +354,7 @@ R = v/ω。v≈0.83、ω_max=1.0 → **R = 0.83 m ≈ 支付门 0.8 m** → **�
 - `blocked_episode` 0.151 vs 期望 0.37 → 注入成功率仅 ~40%，选点判据过严
 - `repair_corner_chords` 是否死代码（LOS 只接受 passable 弦 → 修复分支永不触发）
 
-**产出**：`docs/v1p1_p0_diagnosis.md`，含 D1–D8 全部数值与分支结论。
+**产出**：`docs/reports/v1p1_p0_diagnosis.md`，含 D1–D8 全部数值与分支结论。
 
 ---
 
@@ -520,8 +520,8 @@ R = v/ω。v≈0.83、ω_max=1.0 → **R = 0.83 m ≈ 支付门 0.8 m** → **�
 | 网络 / 导出器 | `sru-navigation-learning/rsl_rl/modules/actor_critic_sru.py` |
 | MDPO | `sru-navigation-learning/rsl_rl/algorithms/mdpo.py` |
 | eval 脚本 | `sru-navigation-sim/scripts/eval_policy.py` |
-| v1 报告 | `docs/b2w_pathfix_v1_final_report.md` |
-| v1 基线 | `docs/phase0_baseline_60s_dwell.md` |
+| v1 报告 | `docs/reports/b2w_pathfix_v1_final_report.md` |
+| v1 基线 | `docs/evals/phase0_baseline_60s_dwell.md` |
 
 ---
 

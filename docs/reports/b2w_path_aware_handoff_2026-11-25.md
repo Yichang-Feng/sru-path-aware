@@ -271,7 +271,7 @@ standard A\* with the Euclidean heuristic or GBFS with the biased heuristic**"�
 | `progress_along_path` | 0.05 | 同 |
 | `episode_termination` | −50 | 同 |
 
-本地改动记录在 `docs/b2w_reward_recalibration_2026-11-24.md`：官方奖励下"站着不动"是最优策略
+本地改动记录在 `docs/reports/b2w_reward_recalibration_2026-11-24.md`：官方奖励下"站着不动"是最优策略
 （站点 return ≈ −5.6，移动 ≈ −13），因此必须给"移动"正奖励。但这次重标定把**直连目标**变成了
 主导项，路径项仍停留在 0.05。
 
@@ -484,7 +484,7 @@ B2W 配置启用 `min_entropy_coef=0`、`entropy_hold_iters≈1000`、`entropy_s
 | Runner（日志/推理） | `.../rsl_rl/runners/on_policy_runner.py` |
 | 当前 run | `.../IsaacLab/logs/rsl_rl/b2w_navigation_mdpo/2026-11-24_09-05-54_b2w_sigma_bounded` |
 | 论文 | `.../docs/Haro et al. - 2026 - Path-conditioned Reinforcement Learning-based Local Planning for Long-Range Navigation.pdf` |
-| 历史分析 | `.../docs/b2w_reward_recalibration_2026-11-24.md`、`.../docs/navigation_rewards.md` |
+| 历史分析 | `.../docs/reports/b2w_reward_recalibration_2026-11-24.md`、`.../docs/specs/navigation_rewards.md` |
 
 ---
 

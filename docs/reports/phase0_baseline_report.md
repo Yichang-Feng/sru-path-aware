@@ -1,6 +1,6 @@
 # Phase 0 阻塞性实测 + 实施报告（B2W path-aware v2）
 
-对应规格：`docs/agent_doing.md`（Stage 0 → Stage F）。本文件只记录**实测数据、做出的取舍、验证结果**；
+对应规格：`docs/specs/agent_doing.md`（Stage 0 → Stage F）。本文件只记录**实测数据、做出的取舍、验证结果**；
 规格本身的冻结参数表仍是唯一真值来源。
 
 ---
@@ -8,7 +8,7 @@
 ## 1. 五项阻塞性实测（M1–M5）
 
 测量脚本：`sru-navigation-sim/scripts/stage0_measure.py`（4×10 tiles，PRM N=300，仅为测量，不是训练配置）。
-原始输出：`docs/phase0_measurements.md`。
+原始输出：`docs/evals/phase0_measurements.md`。
 
 | # | 项 | 实测 | 对设计的影响 |
 |---|---|---|---|
@@ -211,7 +211,7 @@ legacy 管线、`[0,0,0.5,0.5]` 类别、60 维路径观测），只把终止换
 >
 > 两者几乎相同，说明旧策略本来就刹得住（圈内速度 p50 = 0.48 m/s），锁存口径没有灌水。
 > **验收门槛仍取 SR ≥ 0.58（0.480 + 0.10）**，但基线数值以 0.480 为准。
-> 明细：`docs/phase0_baseline_60s_dwell.md`；完整分析见 `docs/b2w_pathfix_v1_final_report.md`。
+> 明细：`docs/evals/phase0_baseline_60s_dwell.md`；完整分析见 `docs/reports/b2w_pathfix_v1_final_report.md`。
 
 ### 5.4 复现命令
 
@@ -225,7 +225,7 @@ cd IsaacLab && PYTHONPATH=/home/yichangfeng/sru-path-aware/sru-navigation-learni
   --task Isaac-Nav-MDPO-B2W-Play-v0 \
   --checkpoint /home/yichangfeng/sru-path-aware/IsaacLab/logs/rsl_rl/b2w_navigation_mdpo/2026-11-24_09-05-54_b2w_sigma_bounded/model_6000.pt \
   --episodes 200 --episode_length_s 60 --num_envs 20 --legacy_env \
-  --out ../docs/phase0_baseline_60s.md --headless
+  --out ../docs/evals/phase0_baseline_60s.md --headless
 ```
 
 > `SR(old rule)`（曾进入 0.5 m）与 `SR`（连续驻留）并列给出，两者的差值就是"碰边锁存"灌进 SR 的水分。
@@ -234,7 +234,7 @@ cd IsaacLab && PYTHONPATH=/home/yichangfeng/sru-path-aware/sru-navigation-learni
 
 - 代码：Stage A–F 已实现并提交；17 项单元测试全绿；10 iter 全量冒烟 **exit 0**。
 - 基线重评：60 s 与 90 s 两档各 200 局已完成（见 §5.2），交付报告
-  `docs/phase0_baseline_60s.md` / `docs/phase0_baseline_90s.md`。
+  `docs/evals/phase0_baseline_60s.md` / `docs/evals/phase0_baseline_90s.md`。
 - **待办**：Stage G 的 4000 iter 全量训练（数天），未启动；见 §7、§8。
 
 ---
@@ -274,7 +274,7 @@ cd IsaacLab && PYTHONPATH=/home/yichangfeng/sru-path-aware/sru-navigation-learni
 > 而且这些图元的原型 USD 要从 Nucleus 拉取。本机当前无法访问 `omniverse-content-production.s3...`，
 > 开着可视化会卡在每个资产 300 s 的超时上。
 
-- 回退：每个 Stage 一个 commit；回退到 `docs/agent_doing.md` 之前的状态即可恢复旧管线
+- 回退：每个 Stage 一个 commit；回退到 `docs/specs/agent_doing.md` 之前的状态即可恢复旧管线
   （`path_pipeline="legacy"` + 旧终止 + 旧奖励表本来就是默认值，所以回退只需回退 B2W 配置里的覆盖）。
 
 ---

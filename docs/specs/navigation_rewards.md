@@ -43,7 +43,7 @@ step_dt      = 0.2 s
 
 > ⚠️ **2026-11-25 起 B2W 换了一套以"跟路径"为主目标的奖励**（path-aware v2）。下表是 2026-11-24
 > 标定后的**历史**配置，保留用于解释旧 run 的曲线；当前值见
-> `docs/phase0_baseline_report.md`，要点：`progress_along_path` 1.2/m（经 `per_metre` 折算成"每米"）、
+> `docs/reports/phase0_baseline_report.md`，要点：`progress_along_path` 1.2/m（经 `per_metre` 折算成"每米"）、
 > `progress` 0.15/m、`reach_goal` 2.0/步、`goal_reached_bonus` +25 一次性、`path_deviation_penalty`
 > −0.15/m、`time_out_penalty` −50（horizon 90 s，故 `Episode_Reward/*` 的还原系数是 **×90**）。
 > 下面的权重不要直接拿去和新 run 比较。
@@ -129,7 +129,7 @@ episode_length_buf >= max_episode_length
 
 这套配方（密集 progress + 1/5 平滑惩罚 + 到点奖励）已在本机 Go2W 上 A/B 验证：
 官方稀疏奖励 SR 0.08，换成该配方后 **iter 25 达 SR 61%、iter 100 达 95%**。
-详见 `docs/b2w_timeout_penalty_analysis_2026-11-23.md`。
+详见 `docs/reports/b2w_timeout_penalty_analysis_2026-11-23.md`。
 
 ## 3. Go2W reward helpers
 

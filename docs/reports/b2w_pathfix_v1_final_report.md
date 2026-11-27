@@ -79,7 +79,7 @@
 **只要"目标附近每步收入 > 0"，完成就永远是坏选择**——这是结构性的，不是调参问题。
 实测每回合 40 步圈内收入 34.2，等价于 1.4 次"完成奖励"，而它宁愿不完成。
 
-> 这条与 `docs/b2w_pathfix_v1_training_analysis_2026-11-26.md` 的判断一致，本报告给出的是 4000 iter 结束时的确认。
+> 这条与 `docs/reports/b2w_pathfix_v1_training_analysis_2026-11-26.md` 的判断一致，本报告给出的是 4000 iter 结束时的确认。
 
 ---
 
@@ -216,8 +216,8 @@ raw 值长期高于墙面 → `clamp` 饱和 → **熵项对 log_std 的梯度�
 ### P1.5（与 P1 同批）：修 §10.1 的"转身僵住"
 
 > **2026-11-26 更新**：用户判定**出生朝向对齐路径不可行**（部署时朝向无法保证），本条的"改出生 yaw"方案作废。
-> 替代方案见 `docs/v1p1_next_plan.md` §3 #5：给"朝向路径切线"加**势函数**奖励（整局总额有界、
-> 不可刷分），再加 2 维 `[cos Δψ_path, sin Δψ_path]` 观测。
+> 替代方案见 `docs/specs/v1p1_next_plan.md` §3 #5：给"朝向路径切线"加**势函数**奖励（整局总额有界、
+> 不可刷分），**不加** `[cos, sin]` 观测：路径点已在机体系，角度可自行推断（用户判定）。
 
 | # | 改动 | 依据 |
 |---|---|---|
@@ -289,14 +289,14 @@ cd /home/yichangfeng/sru-path-aware/IsaacLab && ./isaaclab.sh -p ../sru-navigati
   --task Isaac-Nav-MDPO-B2W-Play-v0 \
   --checkpoint /home/yichangfeng/sru-path-aware/IsaacLab/logs/rsl_rl/b2w_navigation_mdpo/2026-11-25_19-40-08_b2w_pathfix_v1/model_3999.pt \
   --episodes 200 --episode_length_s 60 --num_envs 20 --headless \
-  --out ../docs/b2w_pathfix_v1_eval_60s.md --dump_json ../docs/b2w_pathfix_v1_eval_60s.json
+  --out ../docs/evals/b2w_pathfix_v1_eval_60s.md --dump_json ../docs/evals/b2w_pathfix_v1_eval_60s.json
 ```
 
 > `./isaaclab.sh -p` 需要 `CONDA_PREFIX` 指向可用的解释器，否则会去找 `_isaac_sim/python.sh` 并报
 > "Unable to find any Python executable"。
 
 基线（旧策略 + legacy 环境，同一驻留口径）：把 `--checkpoint` 换成
-`…/2026-11-24_09-05-54_b2w_sigma_bounded/model_6000.pt`，加 `--legacy_env`，输出 `docs/phase0_baseline_60s_dwell.md`。
+`…/2026-11-24_09-05-54_b2w_sigma_bounded/model_6000.pt`，加 `--legacy_env`，输出 `docs/evals/phase0_baseline_60s_dwell.md`。
 
 ---
 
@@ -305,9 +305,9 @@ cd /home/yichangfeng/sru-path-aware/IsaacLab && ./isaaclab.sh -p ../sru-navigati
 | 文件 | 内容 |
 |---|---|
 | 本文 | 4000 iter 全量分析 + 下一步计划 |
-| `docs/b2w_pathfix_v1_eval_60s.md` / `.json` | 新策略 60 s 干净 eval（200 局，含逐回合记录） |
-| `docs/b2w_pathfix_v1_eval_90s.md` / `.json` | 新策略 90 s 干净 eval |
-| `docs/phase0_baseline_60s_dwell.md` / `.json` | 旧策略在同口径下的基线重测 |
+| `docs/evals/b2w_pathfix_v1_eval_60s.md` / `.json` | 新策略 60 s 干净 eval（200 局，含逐回合记录） |
+| `docs/evals/b2w_pathfix_v1_eval_90s.md` / `.json` | 新策略 90 s 干净 eval |
+| `docs/evals/phase0_baseline_60s_dwell.md` / `.json` | 旧策略在同口径下的基线重测 |
 | `sru-navigation-sim/scripts/eval_policy.py` | 修掉"超时被算作提前结束"的 bug；新增圈内步数 / 圈内速度 / 最长驻留连击 / timeout share |
 
 ---
@@ -358,7 +358,7 @@ v2 把方向项换成了路径弧长，梯度一起消失了。
 
 | 事实 | 位置/数据 |
 |---|---|
-| 楼梯是 5 级 × 0.2 m，踏面 0.4 m（`max_height_diff` 0.25 m → PRM 判为可通过） | `docs/phase0_baseline_report.md` §2 |
+| 楼梯是 5 级 × 0.2 m，踏面 0.4 m（`max_height_diff` 0.25 m → PRM 判为可通过） | `docs/reports/phase0_baseline_report.md` §2 |
 | **楼梯弦不会被判不可通行**：`segment_passable` 是沿 Bresenham **逐格**比较相邻格高差，跨一级只有 0.2 m ≤ 0.25 | `prm.py:252-270`；离线实测见下 |
 | 干净 eval 的 stairs 分档是新策略最差的一档：SR **0.122**（旧策略在 legacy 路径下 0.403） | §6 表格 |
 | 本地路径观测是 `(direction_xyz, log 距离)` 15 点 × 4 = 60 维，**含 z 方向** | `observations.py:514` |
@@ -389,7 +389,7 @@ v2 把方向项换成了路径弧长，梯度一起消失了。
    `dir_z ≈ 0.05`（像平路）；但若楼梯正好落在两个航点之间（"左转→上楼梯→右转"就是这种），
    一个 1.4 m 弦要吃 1.0 m 高差，`dir_z ≈ 0.6`，观测上接近"前方向上的墙"。需要在真实 tile 上量（D3b）。
 
-**下一轮要做的**（详见 `docs/v1p1_next_plan.md`）：D1b —— 低层在不同进近角（0°/15°/30°）与速度
+**下一轮要做的**（详见 `docs/specs/v1p1_next_plan.md`）：D1b —— 低层在不同进近角（0°/15°/30°）与速度
 （0.2/0.5/0.8 m/s）下能否爬上 0.2 m 踢面。正对 0.5 m/s 都上不去 → 能力问题（先改地形/课程，不靠奖励硬修）；
 只有斜向失败 → 是进近角问题（对应拐角弦切）。
 

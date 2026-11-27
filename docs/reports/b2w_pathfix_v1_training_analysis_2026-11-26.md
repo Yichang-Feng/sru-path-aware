@@ -194,7 +194,7 @@ GPU：RTX 4090 D，17 132 / 24 564 MiB（69.7%），61 ℃，160 W / 425 W，无
 
 ## 9. 与验收标准的对照
 
-标准来自 `docs/phase0_baseline_report.md` §6 与 `docs/agent_doing.md` §10 G2/G3。
+标准来自 `docs/reports/phase0_baseline_report.md` §6 与 `docs/specs/agent_doing.md` §10 G2/G3。
 
 | G2 指标 | 期望 | 实测（最新 350） | 判定 |
 |---|---|---|---|
@@ -286,7 +286,7 @@ cd IsaacLab && PYTHONPATH=/home/yichangfeng/sru-path-aware/sru-navigation-learni
   --task Isaac-Nav-MDPO-B2W-Play-v0 \
   --checkpoint /home/yichangfeng/sru-path-aware/IsaacLab/logs/rsl_rl/b2w_navigation_mdpo/2026-11-25_19-40-08_b2w_pathfix_v1/model_4000.pt \
   --episodes 200 --episode_length_s 60 --num_envs 20 --headless \
-  --out ../docs/b2w_pathfix_v1_eval_60s.md
+  --out ../docs/evals/b2w_pathfix_v1_eval_60s.md
 ```
 
 对照基线（60 s）：**SR 0.580 / median d_path 0.91 m / SPL 0.449**。

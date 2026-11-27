@@ -548,26 +548,6 @@ def distance_to_path(env: ManagerBasedRLEnv, command_name: str = "robot_goal") -
     return distance.unsqueeze(-1)
 
 
-def path_heading_error(
-    env: ManagerBasedRLEnv, command_name: str = "robot_goal", lookahead_m: float = 1.5
-) -> torch.Tensor:
-    """`[cos Δψ_path, sin Δψ_path]` - bearing to the path point `lookahead_m` ahead, `(num_envs, 2)`.
-
-    The policy otherwise has to work this error out itself from `target_path_local` (15 points x 4
-    floats) plus its own proprioception, and the path never reaches the RNN - it is concatenated
-    only in front of the MLP. Handing the error over directly is the same trick Go2W's
-    `target_heading_delayed` uses for the goal direction.
-
-    The last of `get_path_local`'s samples is used on purpose: sample 0 lies on the robot itself, so
-    its direction vector is degenerate.
-    """
-    goal_cmd_generator: RobotNavigationGoalCommand = env.command_manager._terms[command_name]
-    local = goal_cmd_generator.get_path_local(lookahead_m)
-    direction = local[:, -1, :2]
-    angle = torch.atan2(direction[:, 1], direction[:, 0])
-    return torch.stack([torch.cos(angle), torch.sin(angle)], dim=-1)
-
-
 def time_normalized(env: ManagerBasedRLEnv, command_name: str = "robot_goal") -> torch.Tensor:
     """Time normalized to the maximum episode length.
 

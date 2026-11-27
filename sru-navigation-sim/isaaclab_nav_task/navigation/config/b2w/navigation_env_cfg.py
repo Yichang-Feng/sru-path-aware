@@ -11,7 +11,11 @@ from isaaclab.utils import configclass
 from isaaclab.managers import RewardTermCfg as RewTerm, SceneEntityCfg
 
 from isaaclab_nav_task.navigation.navigation_env_cfg import NavigationEnvCfg, RewardsCfg
-from isaaclab_nav_task.navigation.config.path_aware import apply_path_aware_v2, insert_obs_terms  # noqa: F401
+from isaaclab_nav_task.navigation.config.path_aware import (  # noqa: F401
+    HEADING_LOOKAHEAD_M,
+    apply_path_aware_v2,
+    insert_obs_terms,
+)
 import isaaclab_nav_task.navigation.mdp as mdp
 
 from isaaclab_nav_task.navigation.assets import B2W_CFG, ISAACLAB_NAV_TASKS_ASSETS_DIR  # isort: skip
@@ -94,7 +98,7 @@ class B2WRewardsCfg(RewardsCfg):
     heading_progress_to_path = RewTerm(
         func=mdp.heading_progress_to_path,
         weight=1.0,
-        params={"command_name": "robot_goal", "lookahead_m": 1.5},
+        params={"command_name": "robot_goal", "lookahead_m": HEADING_LOOKAHEAD_M},
     )
     # Terminal shaping around the goal radius: **zeroed in v1.1** for the same reason as
     # `reach_goal`. `instant_arrive` (which dropped the legacy latch) stays in the params so the
@@ -130,9 +134,11 @@ class B2WRewardsCfg(RewardsCfg):
     action_rate_l1 = RewTerm(func=mdp.action_rate_l1, weight=-0.02)
     lateral_movement = RewTerm(func=mdp.lateral_movement, weight=-0.02)
 
-    # 90 s horizon timeout. Still dominant over any single episode's motion penalties, but no longer
-    # several times the whole path reward - it must not make a legitimate 40 m detour unaffordable.
-    time_out_penalty = RewTerm(func=mdp.episode_time_out, weight=-50.0)
+    # 90 s horizon timeout. Every reward term is multiplied by `dt` (0.2 s), so a weight of -50 paid
+    # **-10**, not the -50 the budget assumed: with a -10 timeout, letting the clock run out while
+    # collecting path progress and heading income was cheaper than finishing (measured -5.93 per
+    # episode in both v1 and v1.1 against a 0.6 timeout rate => -10 per timeout). -250 * 0.2 = -50.
+    time_out_penalty = RewTerm(func=mdp.episode_time_out, weight=-250.0)
 
 
 @configclass

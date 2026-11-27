@@ -1,6 +1,6 @@
-# B2W Path-Aware V1.1 下一步计划（据 `docs/agent_do_qwen.md` 梳理）
+# B2W Path-Aware V1.1 下一步计划（据 `docs/specs/agent_do_qwen.md` 梳理）
 
-> 输入：`docs/agent_do_qwen.md`（V1.1 执行手册）、`docs/b2w_pathfix_v1_final_report.md`（v1 全量分析）。
+> 输入：`docs/specs/agent_do_qwen.md`（V1.1 执行手册）、`docs/reports/b2w_pathfix_v1_final_report.md`（v1 全量分析）。
 > 本文件只做**梳理与裁决**：哪些条目直接执行、哪些被证据推翻、哪些按用户判定改道。
 > 两个新前提来自用户：**① 出生朝向对齐路径不可行（不做）；② 楼梯问题必须先查明再改。**
 
@@ -22,7 +22,7 @@
 
 ---
 
-## 0.5 P0 执行结果（2026-11-26 已完成，详见 `docs/v1p1_p0_diagnosis.md`）
+## 0.5 P0 执行结果（2026-11-26 已完成，详见 `docs/reports/v1p1_p0_diagnosis.md`）
 
 | 诊断 | 结果 | 对计划的影响 |
 |---|---|---|
@@ -96,7 +96,7 @@
 | **D7** | 楼梯 tile 的 pitch 分布 vs 40° 阈值 | eval 记录 | p95 > 35° → 上报（先不要动阈值） |
 | **D8** | `paid_m` 按结局分层 | 完成 / 旅馆超时 / 冻结超时 / 摔倒 | 量化各问题吃掉的路径米数 |
 
-产出：`docs/v1p1_p0_diagnosis.md`（D1–D8 全部数值 + 分支结论）。
+产出：`docs/reports/v1p1_p0_diagnosis.md`（D1–D8 全部数值 + 分支结论）。
 
 **便宜的同批核查**：注入成功率（`blocked_episode` 0.151 vs 期望 0.37）、`repair_corner_chords` 死代码确认、
 实际 seg padding 与 pinch 占比。
@@ -117,10 +117,10 @@
 | 6 | ~~`path_generator.py` 改 `seg_passable` 子采样~~ | **取消**（§1：本来就是逐格判定） | — |
 | 7 | `path_generator.py` | 拐角保持重采样（转角 >45° 时把最近的重采样点吸附到原始顶点）→ **P2**，带单测 | P-3(c) |
 | 8 | `path_generator.py::_compute_relax` | `relax = inv \| ((left \| right) & ~pinch)` | §4.1 |
-| 9 | `mdp/observations.py` + cfg | 新增 `[cos Δψ_path, sin Δψ_path]`（+2 维），复用 #5 的前视点 | P-2/P-3 |
+| 9 | ~~`[cos Δψ_path, sin Δψ_path]` 观测（+2 维）~~ | **取消（用户 2026-11-26 判定）**：部署时单独给 1.5 m 处的角度既不直观也不一定准；路径点本身已在机体系里，角度可由相对坐标推断。观测维度保持 **2697 / 5834** | — |
 | 10 | `path_generator.py` / `goal_commands.py` | 首点方向退化修正：`norm < 0.05` 时用该段切向替代 | P-2 |
 | 11 | `config/b2w/agents/rsl_rl_cfg.py` | σ 日程压缩到 4000 iter：`log_std_anneal_start=600, mid=2200, end=3600`；`entropy_hold_iters=400, entropy_decay_span=2600` | §4.2 |
-| 12 | `rsl_rl/modules/actor_critic_sru.py` + 4 个导出器 | 观测维度 2697 → 2699；同步 JIT/ONNX、Single/Dual 的 `__constants__` 与维度 | #9 |
+| 12 | ~~观测维度同步~~ | **不需要**：#9 取消后维度仍是 2697 / 5834 | — |
 | 13 | `goal_commands.py` / runner / `eval_policy.py` | 新增指标（§4） | 度量 |
 
 **注意**：#5 的势函数必须是**势**（整局总额 = 初始朝向误差 − 末态朝向误差，有界），否则就是一个新的刷分项；

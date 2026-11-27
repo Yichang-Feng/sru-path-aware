@@ -1,19 +1,19 @@
 # V1.1 P0 诊断报告（D1–D8）
 
 > 执行：2026-11-26。对象 `b2w_pathfix_v1/model_3999.pt`。
-> 规格：`docs/v1p1_next_plan.md` §2（据 `docs/agent_do_qwen.md` 梳理）。
+> 规格：`docs/specs/v1p1_next_plan.md` §2（据 `docs/specs/agent_do_qwen.md` 梳理）。
 > 全部数字可用下列命令复现，脚本已入库。
 
 ```bash
 # D1 / D1b（低层能力，不加载高层策略）
 python scripts/p0_low_level_probe.py --task Isaac-Nav-MDPO-B2W-Play-v0 --num_envs 4 \
-  --terrain_rows 4 --terrain_cols 12 --headless --out docs/v1p1_p0_probe.json
+  --terrain_rows 4 --terrain_cols 12 --headless --out docs/evals/v1p1_p0_probe.json
 
 # D3–D8（200 局干净 eval，逐回合记录）
 python scripts/eval_policy.py --task Isaac-Nav-MDPO-B2W-Play-v0 \
   --checkpoint <...>/model_3999.pt --episodes 200 --episode_length_s 60 --num_envs 20 \
-  --headless --dump_json docs/v1p1_p0_eval.json --out docs/v1p1_p0_eval.md
-python scripts/p0_eval_analysis.py docs/v1p1_p0_eval.json --out docs/v1p1_p0_eval_summary.md
+  --headless --dump_json docs/evals/v1p1_p0_eval.json --out docs/evals/v1p1_p0_eval.md
+python scripts/p0_eval_analysis.py docs/evals/v1p1_p0_eval.json --out docs/evals/v1p1_p0_eval_summary.md
 ```
 
 ---
@@ -78,7 +78,7 @@ python scripts/p0_eval_analysis.py docs/v1p1_p0_eval.json --out docs/v1p1_p0_eva
 
 > **2026-11-26 修复后复测**（`Prm.compute_free_mask` 改为 `[GROUND_MIN, PLATFORM_MAX]`，见下）：
 > 楼梯 tile 的 invalid 段 **8.14 → 0.95**（目标 <1.5），invalid 段的 clearance 从 0.00 m 回到 0.31 m；
-> 平台格 free 占比 1.00、梯级 free 占比 1.00（复测脚本 `p0_stairs_tiles.py` / `p0_eval_analysis.py docs/v1p1_d3_after_fix.json`）。
+> 平台格 free 占比 1.00、梯级 free 占比 1.00（复测脚本 `p0_stairs_tiles.py` / `p0_eval_analysis.py docs/evals/v1p1_d3_after_fix.json`）。
 > 下表是**修复前**的数字，保留作对照。
 
 | tile | n | 每局 invalid 段 | 拐角处 | 直段 | 高度/出界 | invalid 段的最小 clearance（中位） |

@@ -276,31 +276,44 @@ def heading_progress_to_path(
     the only heading optimum left in the reward table is `progress` (facing the goal), which is why
     the policy froze or reversed instead of turning when the path started behind it (P0 diagnosis
     D4/D5). A *state-occupancy* fix (pay while facing the path) would just be another farmable term,
-    so this pays the **decrease** in heading error instead: the episode total is bounded by the
-    initial error, and oscillating nets zero.
+    so this pays the **decrease** in heading error instead.
 
     The error is measured to the point `lookahead_m` ahead on the path (the last of
-    `get_path_local`'s 15 samples: index 0 sits on the robot and its direction is degenerate) and
-    clamped per step to `max_step_rad`, which is what the low level can actually turn in one step.
-    That clamp is also what keeps a sharp corner from producing a reward spike: at a 90 degree turn
-    the carrot jumps, and without the clamp the potential would pay the whole jump at once.
+    `get_path_local`'s 15 samples: index 0 sits on the robot and its direction is degenerate).
 
-    Fades to zero within `fade_distance_m` of the goal: the terminal behaviour is governed by the
-    dwell and by `velocity_at_goal_penalty`, and a heading term there has no purpose.
+    **The paid quantity is a bounded integrator, not `prev - err` clamped.** The first version paid
+    `clamp(prev - err, +-max_step_rad)` and reset `prev := err` every step. That is *not* a potential:
+    a large *rise* in the error costs at most one clamped step, while the recovery that follows is
+    paid in full, so a policy that makes the error jump (easy at corners, and around the goal where
+    the carrot sits at the path end) earns net positive - the v1.1 run collected **15.4 per episode**
+    against a theoretical bound of pi, and the extra income made orbiting the goal more profitable
+    than finishing (success rate 0.62 -> 0.10).
+
+    Keeping a reference that only moves by the amount actually paid makes the episode total exactly
+    `ref_0 - ref_T`, and clamping that reference to `[0, pi]` bounds it to `[-pi, pi]` while every
+    single step still pays at most `max_step_rad`.
     """
+    import math  # noqa: PLC0415
+
     goal_cmd: RobotNavigationGoalCommand = env.command_manager.get_term(command_name)
     local = goal_cmd.get_path_local(lookahead_m)  # (B, 15, 4): unit dir xyz + normalized log dist
     direction = local[:, -1, :2]
     err = torch.atan2(direction[:, 1], direction[:, 0]).abs()  # [0, pi]
 
-    prev = getattr(env, "_prev_path_heading_err", None)
-    if prev is None or prev.shape != err.shape:
-        # First call (or a different env batch): no history, so there is no progress to pay yet.
+    ref = getattr(env, "_prev_path_heading_err", None)
+    if ref is None or ref.shape != err.shape:
+        # First call (or a different env batch): nothing has been paid yet, so anchor the reference.
         env._prev_path_heading_err = err.clone()
         return torch.zeros_like(err)
-    delta = torch.clamp(prev - err, -max_step_rad, max_step_rad)
-    env._prev_path_heading_err = err.clone()
-    delta = torch.where(env.episode_length_buf <= 1, torch.zeros_like(delta), delta)
+
+    delta = torch.clamp(ref - err, -max_step_rad, max_step_rad)
+    ref = torch.clamp(ref - delta, 0.0, math.pi)
+    # A new episode re-anchors the reference to the live error: the carried-over value belongs to the
+    # previous episode's path and would otherwise pay (or charge) a spurious jump.
+    fresh = env.episode_length_buf <= 1
+    ref = torch.where(fresh, err, ref)
+    delta = torch.where(fresh, torch.zeros_like(delta), delta)
+    env._prev_path_heading_err = ref
 
     dist_goal = torch.norm(goal_cmd._get_unscaled_command()[:, :2], dim=1)
     fade = torch.clamp(dist_goal / max(fade_distance_m, 1e-6), 0.0, 1.0)
